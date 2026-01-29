@@ -313,33 +313,33 @@ The script provides colored output showing:
 
 ### Log File
 
-The script automatically creates a detailed log file (default: `batch_update_log.txt`) that tracks all operations:
+The script automatically creates a detailed log file (default: `batch_update_log.txt`) in tab-separated format for easy parsing:
 
 ```
-=========================================
-Batch Update Log - Started: 2026-01-29 14:32:15
-=========================================
-
-[2026-01-29 14:32:18] ✓ SUCCESS | my-first-repo | PR: https://github.com/yourusername/my-first-repo/pull/42
-[2026-01-29 14:32:25] ✓ SUCCESS | my-second-repo | PR: https://github.com/yourusername/my-second-repo/pull/18
-[2026-01-29 14:32:30] ⊘ NO CHANGES | another-project | No replacements matched
-[2026-01-29 14:32:35] ✗ FAILED | frontend-app | Reason: Failed to clone repository
-[2026-01-29 14:32:42] ✓ SUCCESS | backend-api | Branch pushed (no PR created)
-[2026-01-29 14:32:48] ✓ SUCCESS | mobile-app | PR: https://github.com/yourusername/mobile-app/pull/7
-
-=========================================
-Summary - Completed: 2026-01-29 14:32:50
-=========================================
-Total repositories: 6
-Successful: 4
-Failed: 1
+Repository	Result
+my-first-repo	https://github.com/yourusername/my-first-repo/pull/42
+my-second-repo	https://github.com/yourusername/my-second-repo/pull/18
+another-project	No changes (replacements did not match any content)
+frontend-app	Failed: Failed to clone repository
+backend-api	Branch pushed (PR not created)
+mobile-app	https://github.com/yourusername/mobile-app/pull/7
+test-repo	Failed: Failed to push to remote
 ```
 
-**Log Entry Types:**
-- **✓ SUCCESS** - Repository processed successfully with PR created (includes PR URL)
-- **✓ SUCCESS** - Repository processed, branch pushed but no PR created
-- **⊘ NO CHANGES** - No replacements matched in the repository (skipped)
-- **✗ FAILED** - Operation failed (includes failure reason)
+**Log Entry Format:**
+Each line contains two tab-separated fields:
+1. **Repository name** - The name of the repository processed
+2. **Result** - One of:
+   - `https://...` - Direct PR URL if PR was created successfully
+   - `No changes (replacements did not match any content)` - No files were modified
+   - `Branch pushed (PR not created)` - Changes pushed but PR creation was disabled or failed
+   - `Failed: [reason]` - Operation failed with descriptive error message
+
+**Benefits of Tab-Separated Format:**
+- Easy to import into Excel/Google Sheets
+- Simple to parse with `awk`, `cut`, or Python
+- Compatible with most data processing tools
+- Clickable URLs in most text editors
 
 **Customize Log Location:**
 ```bash
@@ -349,8 +349,8 @@ LOG_FILE="./batch_update_log.txt"
 # Timestamped logs
 LOG_FILE="./logs/batch_update_$(date +%Y%m%d_%H%M%S).log"
 
-# Custom location
-LOG_FILE="/var/log/batch_updates/$(date +%Y%m%d).log"
+# CSV format (also tab-separated, just different extension)
+LOG_FILE="./batch_update_log.tsv"
 ```
 
 ## Error Handling
@@ -574,30 +574,73 @@ WORK_DIR="./batch_update_${TIMESTAMP}"
 
 ### Parsing Log Files
 
-Extract successful PRs from log file:
-```bash
-# Get all PR URLs
-grep "✓ SUCCESS.*PR:" batch_update_log.txt | awk -F'PR: ' '{print $2}'
+Extract information from the tab-separated log file:
 
-# Get failed repos
-grep "✗ FAILED" batch_update_log.txt
+```bash
+# Get all successful PR URLs
+awk -F'\t' '$2 ~ /^https:/ {print $2}' batch_update_log.txt
+
+# Get all failed repos with their error messages
+awk -F'\t' '$2 ~ /^Failed:/ {print $0}' batch_update_log.txt
+
+# Get list of repos with no changes
+awk -F'\t' '$2 ~ /^No changes/ {print $1}' batch_update_log.txt
 
 # Count by status
-grep "✓ SUCCESS" batch_update_log.txt | wc -l
-grep "✗ FAILED" batch_update_log.txt | wc -l
-grep "⊘ NO CHANGES" batch_update_log.txt | wc -l
+echo "PRs created: $(awk -F'\t' '$2 ~ /^https:/ {count++} END {print count}' batch_update_log.txt)"
+echo "Failed: $(awk -F'\t' '$2 ~ /^Failed:/ {count++} END {print count}' batch_update_log.txt)"
+echo "No changes: $(awk -F'\t' '$2 ~ /^No changes/ {count++} END {print count}' batch_update_log.txt)"
+
+# Create clickable HTML report
+awk -F'\t' 'NR==1 {print "<table><tr><th>" $1 "</th><th>" $2 "</th></tr>"} 
+     NR>1 && $2 ~ /^https:/ {print "<tr><td>" $1 "</td><td><a href=\"" $2 "\">" $2 "</a></td></tr>"} 
+     NR>1 && $2 !~ /^https:/ {print "<tr><td>" $1 "</td><td>" $2 "</td></tr>"} 
+     END {print "</table>"}' batch_update_log.txt > report.html
+
+# Import into spreadsheet (works with Excel, Google Sheets, LibreOffice)
+# Just open the .txt file directly - tab-separated format is auto-detected
 ```
 
 ### Retry Failed Repositories
 
 Create a new repo list from failed entries:
+
 ```bash
-# Extract failed repo names
-grep "✗ FAILED" batch_update_log.txt | awk -F' | ' '{print $2}' > failed_repos.txt
+# Extract failed repo names (skip header, get first column of failed rows)
+awk -F'\t' 'NR>1 && $2 ~ /^Failed:/ {print $1}' batch_update_log.txt > failed_repos.txt
 
 # Update script to use this list
 REPO_LIST_FILE="failed_repos.txt"
 ./repo_batch_update.sh
+```
+
+### Python Processing Example
+
+```python
+import csv
+
+# Read the log file
+with open('batch_update_log.txt', 'r') as f:
+    reader = csv.reader(f, delimiter='\t')
+    next(reader)  # Skip header
+    
+    prs_created = []
+    failed_repos = []
+    
+    for repo, result in reader:
+        if result.startswith('https://'):
+            prs_created.append({'repo': repo, 'pr_url': result})
+        elif result.startswith('Failed:'):
+            failed_repos.append({'repo': repo, 'error': result})
+    
+    print(f"Created {len(prs_created)} PRs")
+    print(f"Failed: {len(failed_repos)} repos")
+    
+    # Generate markdown report
+    with open('pr_report.md', 'w') as out:
+        out.write("# PR Report\n\n")
+        for pr in prs_created:
+            out.write(f"- [{pr['repo']}]({pr['pr_url']})\n")
 ```
 
 ## Security Best Practices
@@ -796,16 +839,4 @@ For issues or questions:
 - Added log parsing utilities
 
 ### Version 1.2
-- Added Pull Request creation support
-- Multi-platform support (GitHub, GitLab, Bitbucket)
-- Multi-line commit messages
-- Enhanced error handling
-
-### Version 1.1
-- Added file pattern filtering
-- Improved logging with colors
-- Summary reporting
-
-### Version 1.0
-- Initial release
-- Basic clone, replace, commit, push functionality
+- Added Pull Re
