@@ -1,17 +1,8 @@
-=========================================
-Batch Update Log - Started: 2026-01-29 14:32:15
-=========================================
-
-[2026-01-29 14:32:18] ✓ SUCCESS | my-first-repo | PR: https://github.com/yourusername/my-first-repo/pull/42
-[2026-01-29 14:32:25] ✓ SUCCESS | my-second-repo | PR: https://github.com/yourusername/my-second-repo/pull/18
-[2026-01-29 14:32:30] ⊘ NO CHANGES | another-project | No replacements matched
-[2026-01-29 14:32:35] ✗ FAILED | frontend-app | Reason: Failed to clone repository
-[2026-01-29 14:32:42] ✓ SUCCESS | backend-api | Branch pushed (no PR created)
-[2026-01-29 14:32:48] ✓ SUCCESS | mobile-app | PR: https://github.com/yourusername/mobile-app/pull/7
-
-=========================================
-Summary - Completed: 2026-01-29 14:32:50
-=========================================
-Total repositories: 6
-Successful: 4
-Failed: 1
+Repository	Result
+my-first-repo	https://github.com/yourusername/my-first-repo/pull/42
+my-second-repo	https://github.com/yourusername/my-second-repo/pull/18
+another-project	No changes (replacements did not match any content)
+frontend-app	Failed: Failed to clone repository
+backend-api	Branch pushed (PR not created)
+mobile-app	https://github.com/yourusername/mobile-app/pull/7
+test-repo	Failed: Failed to push to remote
