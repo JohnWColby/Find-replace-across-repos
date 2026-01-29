@@ -111,26 +111,18 @@ log_warning() {
     echo -e "${YELLOW}[WARNING]${NC} $1"
 }
 
-# Function to log to file
-log_to_file() {
-    local timestamp=$(date '+%Y-%m-%d %H:%M:%S')
-    echo "[$timestamp] $1" >> "$LOG_FILE"
-}
-
 # Function to log completed repo with PR URL
 log_completed_repo() {
     local repo_name=$1
     local pr_url=$2
     local status=$3
     
-    local timestamp=$(date '+%Y-%m-%d %H:%M:%S')
-    
     if [ -n "$pr_url" ]; then
-        echo "[$timestamp] ✓ SUCCESS | $repo_name | PR: $pr_url" >> "$LOG_FILE"
+        echo -e "${repo_name}\t${pr_url}" >> "$LOG_FILE"
     elif [ "$status" = "no_changes" ]; then
-        echo "[$timestamp] ⊘ NO CHANGES | $repo_name | No replacements matched" >> "$LOG_FILE"
+        echo -e "${repo_name}\tNo changes (replacements did not match any content)" >> "$LOG_FILE"
     else
-        echo "[$timestamp] ✓ SUCCESS | $repo_name | Branch pushed (no PR created)" >> "$LOG_FILE"
+        echo -e "${repo_name}\tBranch pushed (PR not created)" >> "$LOG_FILE"
     fi
 }
 
@@ -139,8 +131,7 @@ log_failed_repo() {
     local repo_name=$1
     local reason=$2
     
-    local timestamp=$(date '+%Y-%m-%d %H:%M:%S')
-    echo "[$timestamp] ✗ FAILED | $repo_name | Reason: $reason" >> "$LOG_FILE"
+    echo -e "${repo_name}\tFailed: ${reason}" >> "$LOG_FILE"
 }
 
 # Function to generate git URL from repo name
@@ -452,12 +443,8 @@ process_repo() {
 main() {
     log_info "Starting repo batch update script"
     
-    # Initialize log file
-    local timestamp=$(date '+%Y-%m-%d %H:%M:%S')
-    echo "=========================================" > "$LOG_FILE"
-    echo "Batch Update Log - Started: $timestamp" >> "$LOG_FILE"
-    echo "=========================================" >> "$LOG_FILE"
-    echo "" >> "$LOG_FILE"
+    # Initialize log file with header
+    echo -e "Repository\tResult" > "$LOG_FILE"
     
     # Check if repo list file exists
     if [ ! -f "$REPO_LIST_FILE" ]; then
@@ -503,15 +490,6 @@ main() {
     log_info "Failed: $failed_repos"
     log_info ""
     log_info "Detailed log saved to: $LOG_FILE"
-    
-    # Add summary to log file
-    echo "" >> "$LOG_FILE"
-    echo "=========================================" >> "$LOG_FILE"
-    echo "Summary - Completed: $(date '+%Y-%m-%d %H:%M:%S')" >> "$LOG_FILE"
-    echo "=========================================" >> "$LOG_FILE"
-    echo "Total repositories: $total_repos" >> "$LOG_FILE"
-    echo "Successful: $successful_repos" >> "$LOG_FILE"
-    echo "Failed: $failed_repos" >> "$LOG_FILE"
     
     # Exit with error if any repos failed, but don't prevent completion
     if [ $failed_repos -gt 0 ]; then
