@@ -41,7 +41,11 @@ A powerful bash script for automating bulk updates across multiple Git repositor
    EOF
    ```
 
-3. **Configure the script** (edit the CONFIGURATION SECTION)
+3. **Edit the configuration file:**
+   ```bash
+   # Edit config.sh with your settings
+   nano config.sh
+   ```
 
 4. **Run the script:**
    ```bash
@@ -50,9 +54,22 @@ A powerful bash script for automating bulk updates across multiple Git repositor
 
 ## Configuration
 
-Edit the `CONFIGURATION SECTION` at the top of the script:
+All settings are stored in a separate configuration file (`config.sh` by default). This allows you to update the script without losing your settings.
+
+### Configuration File Structure
+
+The script loads settings from `config.sh` (or a custom config file specified via `CONFIG_FILE` environment variable).
+
+**Default config file location:** `./config.sh`
+
+**Use a different config file:**
+```bash
+CONFIG_FILE="./my-custom-config.sh" ./repo_batch_update.sh
+```
 
 ### Required Settings
+
+Edit `config.sh` and set these required values:
 
 ```bash
 # File containing repo names (one per line)
@@ -80,7 +97,7 @@ declare -a REPLACEMENTS=(
 # Working directory for cloning repos
 WORK_DIR="./repos_temp"
 
-# Log file for tracking completed repos and PR URLs
+# Log file location
 LOG_FILE="./batch_update_log.txt"
 
 # File patterns to process (empty = all files)
@@ -133,6 +150,28 @@ PR_BASE_BRANCH="main"
 
 # Personal Access Token (recommended: use environment variable)
 GIT_TOKEN="${GIT_TOKEN:-}"
+```
+
+### Multiple Configuration Files
+
+You can maintain multiple config files for different update scenarios:
+
+```bash
+# config.api-update.sh - For API endpoint updates
+# config.copyright.sh - For copyright year updates
+# config.dependency-bump.sh - For dependency updates
+```
+
+**Run with specific config:**
+```bash
+CONFIG_FILE="./config.api-update.sh" ./repo_batch_update.sh
+```
+
+Or create wrapper scripts:
+```bash
+#!/bin/bash
+# run_api_update.sh
+CONFIG_FILE="./config.api-update.sh" ./repo_batch_update.sh
 ```
 
 ## Repos List File Format
@@ -426,9 +465,13 @@ export GIT_TOKEN="your_token_here"
 
 ### Example 1: Update API Endpoints
 
+**Create `config.api-update.sh`:**
 ```bash
-# Configuration
+#!/bin/bash
+
+REPO_LIST_FILE="api_repos.txt"
 BRANCH_NAME="update-api-endpoints"
+GIT_BASE_URL="https://github.com/mycompany"
 PR_BASE_BRANCH="develop"
 
 declare -a REPLACEMENTS=(
@@ -459,18 +502,33 @@ Migrates all API calls from v1 to v2 endpoints.
 - [x] Manual smoke testing complete
 
 Closes JIRA-1234"
+
+CREATE_PR=true
+GIT_PLATFORM="github"
+GIT_TOKEN="${GIT_TOKEN:-}"
+```
+
+**Run:**
+```bash
+CONFIG_FILE="./config.api-update.sh" ./repo_batch_update.sh
 ```
 
 ### Example 2: Dependency Version Bump
 
-```bash
-# repos.txt
+**Create repos list (`package_repos.txt`):**
+```
 frontend-app
 backend-api
 mobile-app
+```
 
-# Configuration
+**Create `config.react-bump.sh`:**
+```bash
+#!/bin/bash
+
+REPO_LIST_FILE="package_repos.txt"
 BRANCH_NAME="bump-react-version"
+GIT_BASE_URL="https://github.com/mycompany"
 FILE_PATTERNS="package.json"
 
 declare -a REPLACEMENTS=(
@@ -481,12 +539,24 @@ declare -a REPLACEMENTS=(
 COMMIT_MESSAGE="Bump React to v18.2.0"
 PR_TITLE="Bump React to v18.2.0"
 CREATE_PR=true
+GIT_PLATFORM="github"
+GIT_TOKEN="${GIT_TOKEN:-}"
+```
+
+**Run:**
+```bash
+CONFIG_FILE="./config.react-bump.sh" ./repo_batch_update.sh
 ```
 
 ### Example 3: Copyright Year Update
 
+**Create `config.copyright.sh`:**
 ```bash
+#!/bin/bash
+
+REPO_LIST_FILE="all_repos.txt"
 BRANCH_NAME="update-copyright-2026"
+GIT_BASE_URL="https://github.com/mycompany"
 FILE_PATTERNS="*.py *.js *.java *.go"
 
 declare -a REPLACEMENTS=(
@@ -496,6 +566,14 @@ declare -a REPLACEMENTS=(
 
 COMMIT_MESSAGE="Update copyright year to 2026"
 PR_TITLE="Update copyright year to 2026"
+CREATE_PR=true
+GIT_PLATFORM="github"
+GIT_TOKEN="${GIT_TOKEN:-}"
+```
+
+**Run:**
+```bash
+CONFIG_FILE="./config.copyright.sh" ./repo_batch_update.sh
 ```
 
 ### Example 4: Multi-Platform (GitLab)
@@ -651,6 +729,7 @@ with open('batch_update_log.txt', 'r') as f:
    echo ".env" >> .gitignore
    echo "*token*" >> .gitignore
    echo "*.log" >> .gitignore
+   echo "config.sh" >> .gitignore  # If it contains sensitive data
    ```
 
 2. **Use environment variables for tokens**
@@ -675,6 +754,42 @@ with open('batch_update_log.txt', 'r') as f:
 6. **Review changes before running**
    - Test on a single repo first
    - Use `CREATE_PR=false` for initial testing
+
+## Updating the Script
+
+One of the key benefits of separating configuration is that you can update the script without affecting your settings:
+
+### Update Process
+
+1. **Backup your config file** (optional, but recommended):
+   ```bash
+   cp config.sh config.sh.backup
+   ```
+
+2. **Download the latest script**:
+   ```bash
+   # Keep your config.sh, just update the main script
+   wget https://example.com/repo_batch_update.sh -O repo_batch_update.sh
+   chmod +x repo_batch_update.sh
+   ```
+
+3. **Your configuration remains unchanged** - the script will automatically load your existing `config.sh`
+
+### Version Control Best Practices
+
+```bash
+# In your repository
+git add repo_batch_update.sh      # Track the script
+git add config.sh.example         # Track an example config
+echo "config.sh" >> .gitignore    # Ignore your actual config
+echo "*.log" >> .gitignore        # Ignore log files
+echo "repos_temp/" >> .gitignore  # Ignore working directory
+```
+
+This way, you can:
+- Update the script via `git pull`
+- Keep your personal config file untracked
+- Share config templates with your team
 
 ## CI/CD Integration
 
@@ -831,12 +946,32 @@ For issues or questions:
 
 ## Changelog
 
-### Version 1.3 (Current)
+### Version 1.4 (Current)
+- **Separated configuration from script logic**
+- Configuration now in separate `config.sh` file
+- Support for multiple config files
+- Easier script updates without losing settings
+- Added config file validation
+
+### Version 1.3
 - Added detailed logging to file with timestamps
 - Logs PR URLs for successful operations
 - Continue processing on errors (skip failed repos)
 - Track completion status (success, failed, no changes)
 - Added log parsing utilities
+- Simplified log format to tab-separated values
 
 ### Version 1.2
-- Added Pull Re
+- Added Pull Request creation support
+- Multi-platform support (GitHub, GitLab, Bitbucket)
+- Multi-line commit messages
+- Enhanced error handling
+
+### Version 1.1
+- Added file pattern filtering
+- Improved logging with colors
+- Summary reporting
+
+### Version 1.0
+- Initial release
+- Basic clone, replace, commit, push functionality
