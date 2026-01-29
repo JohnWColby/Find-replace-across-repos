@@ -16,6 +16,39 @@ REPO_LIST_FILE="repos.txt"
 # Branch name to create
 BRANCH_NAME="update-strings"
 
+# Create Pull Request after pushing? (true/false)
+CREATE_PR=true
+
+# Git platform (github, gitlab, or bitbucket)
+GIT_PLATFORM="github"
+
+# PR Title
+PR_TITLE="Update string replacements across repository"
+
+# PR Description/Body (supports multi-line)
+PR_DESCRIPTION="This PR updates several deprecated strings across the codebase.
+
+## Changes:
+- Updated API endpoints
+- Fixed configuration values
+- Modernized function names
+
+## Testing:
+- [ ] All tests pass
+- [ ] Manual testing completed
+
+Refs: #1234"
+
+# Base branch to target for PR (usually 'main' or 'master')
+PR_BASE_BRANCH="main"
+
+# GitHub/GitLab/Bitbucket Personal Access Token
+# For GitHub: Create at https://github.com/settings/tokens (needs 'repo' scope)
+# For GitLab: Create at https://gitlab.com/-/profile/personal_access_tokens (needs 'api' scope)
+# For Bitbucket: Create at https://bitbucket.org/account/settings/app-passwords/ (needs 'pullrequest:write' scope)
+# You can also set this as an environment variable: export GIT_TOKEN="your_token_here"
+GIT_TOKEN="${GIT_TOKEN:-}"  # Will use environment variable if set, otherwise empty
+
 # Git remote base URL (will be combined with repo name)
 # Examples:
 #   For GitHub: "https://github.com/username"
@@ -26,8 +59,19 @@ GIT_BASE_URL="https://github.com/yourusername"
 # Working directory for cloning repos (will be created if it doesn't exist)
 WORK_DIR="./repos_temp"
 
-# Commit message
-COMMIT_MESSAGE="Update string replacements across repository"
+# Commit message (supports multi-line)
+# For a single-line message, use:
+# COMMIT_MESSAGE="Update string replacements across repository"
+#
+# For a multi-line message, use this format:
+COMMIT_MESSAGE="Update string replacements across repository
+
+This commit updates several deprecated strings:
+- Updated API endpoints
+- Fixed configuration values
+- Modernized function names
+
+Refs: #1234"
 
 # Find/Replace mappings (add as many as needed)
 # Format: "SEARCH_STRING|REPLACEMENT_STRING"
@@ -75,6 +119,160 @@ generate_git_url() {
     else
         # HTTPS format: https://github.com/username/repo.git
         echo "${GIT_BASE_URL}/${repo_name}.git"
+    fi
+}
+
+# Function to extract owner and repo from git URL or base URL
+extract_owner_repo() {
+    local repo_name=$1
+    local owner=""
+    
+    # Extract owner from base URL
+    if [[ $GIT_BASE_URL == git@*:* ]]; then
+        # SSH format: git@github.com:username
+        owner=$(echo "$GIT_BASE_URL" | sed 's/.*://')
+    elif [[ $GIT_BASE_URL == https://* ]] || [[ $GIT_BASE_URL == http://* ]]; then
+        # HTTPS format: https://github.com/username
+        owner=$(echo "$GIT_BASE_URL" | sed 's|.*/||')
+    fi
+    
+    echo "$owner/$repo_name"
+}
+
+# Function to create a Pull Request
+create_pull_request() {
+    local repo_name=$1
+    local owner_repo=$(extract_owner_repo "$repo_name")
+    
+    if [ -z "$GIT_TOKEN" ]; then
+        log_warning "GIT_TOKEN not set. Skipping PR creation."
+        log_info "To create PRs automatically, set GIT_TOKEN environment variable or update the script."
+        return 0
+    fi
+    
+    log_info "Creating Pull Request..."
+    
+    case $GIT_PLATFORM in
+        github)
+            create_github_pr "$owner_repo"
+            ;;
+        gitlab)
+            create_gitlab_pr "$owner_repo"
+            ;;
+        bitbucket)
+            create_bitbucket_pr "$owner_repo"
+            ;;
+        *)
+            log_error "Unknown platform: $GIT_PLATFORM"
+            return 1
+            ;;
+    esac
+}
+
+# Function to create GitHub PR
+create_github_pr() {
+    local repo=$1
+    
+    local response=$(curl -s -X POST \
+        -H "Authorization: token $GIT_TOKEN" \
+        -H "Accept: application/vnd.github.v3+json" \
+        "https://api.github.com/repos/$repo/pulls" \
+        -d @- <<EOF
+{
+  "title": "$PR_TITLE",
+  "body": "$PR_DESCRIPTION",
+  "head": "$BRANCH_NAME",
+  "base": "$PR_BASE_BRANCH"
+}
+EOF
+)
+    
+    # Check if PR was created successfully
+    local pr_url=$(echo "$response" | grep -o '"html_url": *"[^"]*"' | head -1 | sed 's/"html_url": *"\([^"]*\)"/\1/')
+    
+    if [ -n "$pr_url" ]; then
+        log_info "✓ Pull Request created: $pr_url"
+        return 0
+    else
+        local error_message=$(echo "$response" | grep -o '"message": *"[^"]*"' | sed 's/"message": *"\([^"]*\)"/\1/')
+        log_error "Failed to create PR: $error_message"
+        log_error "Response: $response"
+        return 1
+    fi
+}
+
+# Function to create GitLab MR (Merge Request)
+create_gitlab_pr() {
+    local repo=$1
+    local encoded_repo=$(echo "$repo" | sed 's/\//%2F/g')
+    
+    # GitLab uses different API structure - adjust the URL based on your GitLab instance
+    local gitlab_url="https://gitlab.com"
+    
+    local response=$(curl -s -X POST \
+        -H "PRIVATE-TOKEN: $GIT_TOKEN" \
+        -H "Content-Type: application/json" \
+        "$gitlab_url/api/v4/projects/$encoded_repo/merge_requests" \
+        -d @- <<EOF
+{
+  "source_branch": "$BRANCH_NAME",
+  "target_branch": "$PR_BASE_BRANCH",
+  "title": "$PR_TITLE",
+  "description": "$PR_DESCRIPTION"
+}
+EOF
+)
+    
+    local mr_url=$(echo "$response" | grep -o '"web_url": *"[^"]*"' | head -1 | sed 's/"web_url": *"\([^"]*\)"/\1/')
+    
+    if [ -n "$mr_url" ]; then
+        log_info "✓ Merge Request created: $mr_url"
+        return 0
+    else
+        local error_message=$(echo "$response" | grep -o '"message": *"[^"]*"' | sed 's/"message": *"\([^"]*\)"/\1/')
+        log_error "Failed to create MR: $error_message"
+        log_error "Response: $response"
+        return 1
+    fi
+}
+
+# Function to create Bitbucket PR
+create_bitbucket_pr() {
+    local repo=$1
+    
+    # Bitbucket API v2.0
+    local response=$(curl -s -X POST \
+        -u "$GIT_TOKEN" \
+        -H "Content-Type: application/json" \
+        "https://api.bitbucket.org/2.0/repositories/$repo/pullrequests" \
+        -d @- <<EOF
+{
+  "title": "$PR_TITLE",
+  "description": "$PR_DESCRIPTION",
+  "source": {
+    "branch": {
+      "name": "$BRANCH_NAME"
+    }
+  },
+  "destination": {
+    "branch": {
+      "name": "$PR_BASE_BRANCH"
+    }
+  }
+}
+EOF
+)
+    
+    local pr_url=$(echo "$response" | grep -o '"html": *{[^}]*"href": *"[^"]*"' | sed 's/.*"href": *"\([^"]*\)"/\1/')
+    
+    if [ -n "$pr_url" ]; then
+        log_info "✓ Pull Request created: $pr_url"
+        return 0
+    else
+        local error_message=$(echo "$response" | grep -o '"message": *"[^"]*"' | sed 's/"message": *"\([^"]*\)"/\1/')
+        log_error "Failed to create PR: $error_message"
+        log_error "Response: $response"
+        return 1
     fi
 }
 
@@ -173,6 +371,13 @@ process_repo() {
         log_error "Failed to push branch to remote"
         cd - > /dev/null
         return 1
+    fi
+    
+    # Create Pull Request if enabled
+    if [ "$CREATE_PR" = true ]; then
+        if ! create_pull_request "$repo_name"; then
+            log_warning "Failed to create PR for $repo_name, but changes were pushed successfully"
+        fi
     fi
     
     log_info "Successfully processed $repo_name"
