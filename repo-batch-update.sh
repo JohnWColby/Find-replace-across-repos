@@ -4,7 +4,7 @@
 # This script clones multiple repositories, creates a branch, performs find/replace operations,
 # commits the changes, and pushes to remote.
 
-set -e  # Exit on error
+# Note: Script continues even if individual repos fail
 
 # ============================================================================
 # CONFIGURATION SECTION - MODIFY THESE VALUES
@@ -59,6 +59,9 @@ GIT_BASE_URL="https://github.com/yourusername"
 # Working directory for cloning repos (will be created if it doesn't exist)
 WORK_DIR="./repos_temp"
 
+# Log file for tracking completed repos and PR URLs
+LOG_FILE="./batch_update_log.txt"
+
 # Commit message (supports multi-line)
 # For a single-line message, use:
 # COMMIT_MESSAGE="Update string replacements across repository"
@@ -108,6 +111,38 @@ log_warning() {
     echo -e "${YELLOW}[WARNING]${NC} $1"
 }
 
+# Function to log to file
+log_to_file() {
+    local timestamp=$(date '+%Y-%m-%d %H:%M:%S')
+    echo "[$timestamp] $1" >> "$LOG_FILE"
+}
+
+# Function to log completed repo with PR URL
+log_completed_repo() {
+    local repo_name=$1
+    local pr_url=$2
+    local status=$3
+    
+    local timestamp=$(date '+%Y-%m-%d %H:%M:%S')
+    
+    if [ -n "$pr_url" ]; then
+        echo "[$timestamp] ✓ SUCCESS | $repo_name | PR: $pr_url" >> "$LOG_FILE"
+    elif [ "$status" = "no_changes" ]; then
+        echo "[$timestamp] ⊘ NO CHANGES | $repo_name | No replacements matched" >> "$LOG_FILE"
+    else
+        echo "[$timestamp] ✓ SUCCESS | $repo_name | Branch pushed (no PR created)" >> "$LOG_FILE"
+    fi
+}
+
+# Function to log failed repo
+log_failed_repo() {
+    local repo_name=$1
+    local reason=$2
+    
+    local timestamp=$(date '+%Y-%m-%d %H:%M:%S')
+    echo "[$timestamp] ✗ FAILED | $repo_name | Reason: $reason" >> "$LOG_FILE"
+}
+
 # Function to generate git URL from repo name
 generate_git_url() {
     local repo_name=$1
@@ -147,26 +182,31 @@ create_pull_request() {
     if [ -z "$GIT_TOKEN" ]; then
         log_warning "GIT_TOKEN not set. Skipping PR creation."
         log_info "To create PRs automatically, set GIT_TOKEN environment variable or update the script."
+        echo ""  # Return empty string
         return 0
     fi
     
     log_info "Creating Pull Request..."
     
+    local pr_url=""
     case $GIT_PLATFORM in
         github)
-            create_github_pr "$owner_repo"
+            pr_url=$(create_github_pr "$owner_repo")
             ;;
         gitlab)
-            create_gitlab_pr "$owner_repo"
+            pr_url=$(create_gitlab_pr "$owner_repo")
             ;;
         bitbucket)
-            create_bitbucket_pr "$owner_repo"
+            pr_url=$(create_bitbucket_pr "$owner_repo")
             ;;
         *)
             log_error "Unknown platform: $GIT_PLATFORM"
+            echo ""
             return 1
             ;;
     esac
+    
+    echo "$pr_url"  # Return the PR URL
 }
 
 # Function to create GitHub PR
@@ -192,11 +232,11 @@ EOF
     
     if [ -n "$pr_url" ]; then
         log_info "✓ Pull Request created: $pr_url"
+        echo "$pr_url"  # Return the URL
         return 0
     else
         local error_message=$(echo "$response" | grep -o '"message": *"[^"]*"' | sed 's/"message": *"\([^"]*\)"/\1/')
         log_error "Failed to create PR: $error_message"
-        log_error "Response: $response"
         return 1
     fi
 }
@@ -227,11 +267,11 @@ EOF
     
     if [ -n "$mr_url" ]; then
         log_info "✓ Merge Request created: $mr_url"
+        echo "$mr_url"  # Return the URL
         return 0
     else
         local error_message=$(echo "$response" | grep -o '"message": *"[^"]*"' | sed 's/"message": *"\([^"]*\)"/\1/')
         log_error "Failed to create MR: $error_message"
-        log_error "Response: $response"
         return 1
     fi
 }
@@ -267,11 +307,11 @@ EOF
     
     if [ -n "$pr_url" ]; then
         log_info "✓ Pull Request created: $pr_url"
+        echo "$pr_url"  # Return the URL
         return 0
     else
         local error_message=$(echo "$response" | grep -o '"message": *"[^"]*"' | sed 's/"message": *"\([^"]*\)"/\1/')
         log_error "Failed to create PR: $error_message"
-        log_error "Response: $response"
         return 1
     fi
 }
@@ -305,7 +345,7 @@ perform_replacements() {
     
     if [ "$changes_made" = false ]; then
         log_warning "No changes were made in this repository"
-        return 1
+        return 2  # Return 2 to indicate no changes
     fi
     
     return 0
@@ -324,24 +364,34 @@ process_repo() {
     
     # Clone the repository
     log_info "Cloning repository..."
-    if ! git clone "$git_url" "$repo_path"; then
+    if ! git clone "$git_url" "$repo_path" 2>&1 | grep -v "^Cloning into"; then
         log_error "Failed to clone $repo_name"
+        log_failed_repo "$repo_name" "Failed to clone repository"
         return 1
     fi
     
-    cd "$repo_path" || return 1
+    cd "$repo_path" || {
+        log_failed_repo "$repo_name" "Failed to change directory"
+        return 1
+    }
     
     # Create and checkout new branch
     log_info "Creating branch: $BRANCH_NAME"
-    if ! git checkout -b "$BRANCH_NAME"; then
+    if ! git checkout -b "$BRANCH_NAME" 2>&1 | grep -v "^Switched to"; then
         log_error "Failed to create branch $BRANCH_NAME"
+        log_failed_repo "$repo_name" "Failed to create branch"
         cd - > /dev/null
         return 1
     fi
     
     # Perform replacements
-    if ! perform_replacements "$repo_path"; then
+    local replacement_status=0
+    perform_replacements "$repo_path"
+    replacement_status=$?
+    
+    if [ $replacement_status -eq 2 ]; then
         log_warning "Skipping commit for $repo_name (no changes made)"
+        log_completed_repo "$repo_name" "" "no_changes"
         cd - > /dev/null
         return 0
     fi
@@ -353,31 +403,41 @@ process_repo() {
     # Check if there are changes to commit
     if git diff --cached --quiet; then
         log_warning "No changes to commit for $repo_name"
+        log_completed_repo "$repo_name" "" "no_changes"
         cd - > /dev/null
         return 0
     fi
     
     # Commit changes
     log_info "Creating commit..."
-    if ! git commit -m "$COMMIT_MESSAGE"; then
+    if ! git commit -m "$COMMIT_MESSAGE" > /dev/null 2>&1; then
         log_error "Failed to commit changes"
+        log_failed_repo "$repo_name" "Failed to commit changes"
         cd - > /dev/null
         return 1
     fi
     
     # Push to remote
     log_info "Pushing branch to remote..."
-    if ! git push -u origin "$BRANCH_NAME"; then
+    if ! git push -u origin "$BRANCH_NAME" 2>&1 | grep -v "^To\|^remote:\|^branch"; then
         log_error "Failed to push branch to remote"
+        log_failed_repo "$repo_name" "Failed to push to remote"
         cd - > /dev/null
         return 1
     fi
     
     # Create Pull Request if enabled
+    local pr_url=""
     if [ "$CREATE_PR" = true ]; then
-        if ! create_pull_request "$repo_name"; then
+        pr_url=$(create_pull_request "$repo_name")
+        if [ -z "$pr_url" ]; then
             log_warning "Failed to create PR for $repo_name, but changes were pushed successfully"
+            log_completed_repo "$repo_name" "" "pushed"
+        else
+            log_completed_repo "$repo_name" "$pr_url" "success"
         fi
+    else
+        log_completed_repo "$repo_name" "" "pushed"
     fi
     
     log_info "Successfully processed $repo_name"
@@ -392,6 +452,13 @@ process_repo() {
 main() {
     log_info "Starting repo batch update script"
     
+    # Initialize log file
+    local timestamp=$(date '+%Y-%m-%d %H:%M:%S')
+    echo "=========================================" > "$LOG_FILE"
+    echo "Batch Update Log - Started: $timestamp" >> "$LOG_FILE"
+    echo "=========================================" >> "$LOG_FILE"
+    echo "" >> "$LOG_FILE"
+    
     # Check if repo list file exists
     if [ ! -f "$REPO_LIST_FILE" ]; then
         log_error "Repo list file not found: $REPO_LIST_FILE"
@@ -405,6 +472,7 @@ main() {
     local total_repos=0
     local successful_repos=0
     local failed_repos=0
+    local skipped_repos=0
     
     while IFS= read -r repo_name || [ -n "$repo_name" ]; do
         # Skip empty lines and comments
@@ -415,10 +483,12 @@ main() {
         
         total_repos=$((total_repos + 1))
         
+        # Process repo and capture return code
         if process_repo "$repo_name"; then
             successful_repos=$((successful_repos + 1))
         else
             failed_repos=$((failed_repos + 1))
+            log_warning "Continuing with next repository..."
         fi
         
         echo ""
@@ -431,9 +501,21 @@ main() {
     log_info "Total repositories: $total_repos"
     log_info "Successful: $successful_repos"
     log_info "Failed: $failed_repos"
+    log_info ""
+    log_info "Detailed log saved to: $LOG_FILE"
     
+    # Add summary to log file
+    echo "" >> "$LOG_FILE"
+    echo "=========================================" >> "$LOG_FILE"
+    echo "Summary - Completed: $(date '+%Y-%m-%d %H:%M:%S')" >> "$LOG_FILE"
+    echo "=========================================" >> "$LOG_FILE"
+    echo "Total repositories: $total_repos" >> "$LOG_FILE"
+    echo "Successful: $successful_repos" >> "$LOG_FILE"
+    echo "Failed: $failed_repos" >> "$LOG_FILE"
+    
+    # Exit with error if any repos failed, but don't prevent completion
     if [ $failed_repos -gt 0 ]; then
-        exit 1
+        log_warning "Some repositories failed. Check the log file for details."
     fi
 }
 
