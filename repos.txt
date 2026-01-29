@@ -1,0 +1,10 @@
+# Example repos.txt file
+# One repository name per line
+# Lines starting with # are ignored
+# Empty lines are ignored
+
+my-first-repo
+my-second-repo
+another-project
+frontend-app
+backend-api
