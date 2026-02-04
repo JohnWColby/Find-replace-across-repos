@@ -43,8 +43,13 @@ fi
 
 # Function to set up Git authentication
 setup_git_auth() {
+    log_info "Setting up Git authentication..."
+    log_info "Authentication method: $GIT_AUTH_METHOD"
+    
     case $GIT_AUTH_METHOD in
         token)
+            log_info "Configuring token authentication..."
+            
             if [ -z "$GIT_AUTH_TOKEN" ]; then
                 echo "ERROR: GIT_AUTH_METHOD is 'token' but GIT_AUTH_TOKEN is not set"
                 echo "Set GIT_AUTH_TOKEN in config.sh or as environment variable"
@@ -56,6 +61,9 @@ setup_git_auth() {
                 echo "Set GIT_USERNAME in config.sh"
                 exit 1
             fi
+            
+            log_info "Username: $GIT_USERNAME"
+            log_info "Token: ${GIT_AUTH_TOKEN:0:10}... (truncated for security)"
             
             # Configure Git credential helper to use the token
             # This sets up authentication for HTTPS URLs
@@ -69,19 +77,24 @@ setup_git_auth() {
                 git_host=$(echo "$GIT_BASE_URL" | sed 's|http://||' | sed 's|/.*||')
             else
                 echo "ERROR: GIT_AUTH_METHOD is 'token' but GIT_BASE_URL is not HTTPS"
+                echo "Current GIT_BASE_URL: $GIT_BASE_URL"
                 echo "For token auth, use https:// URLs like: https://github.com/org-name"
                 exit 1
             fi
+            
+            log_info "Git host: $git_host"
             
             # Store credentials in Git credential store
             # This creates/updates ~/.git-credentials
             echo "https://${GIT_USERNAME}:${GIT_AUTH_TOKEN}@${git_host}" > ~/.git-credentials-batch-temp
             git config --global credential.helper "store --file ~/.git-credentials-batch-temp"
             
-            log_info "Git authentication configured using token for ${git_host}"
+            log_info "✓ Git authentication configured using token for ${git_host}"
             ;;
             
         ssh)
+            log_info "Configuring SSH authentication..."
+            
             # Check if SSH agent is running and has keys
             if ! ssh-add -l &>/dev/null; then
                 echo "ERROR: GIT_AUTH_METHOD is 'ssh' but no SSH keys are loaded"
@@ -90,13 +103,20 @@ setup_git_auth() {
                 exit 1
             fi
             
+            # List loaded keys
+            log_info "Loaded SSH keys:"
+            ssh-add -l | while read line; do
+                log_info "  $line"
+            done
+            
             if [[ $GIT_BASE_URL != git@* ]]; then
                 echo "ERROR: GIT_AUTH_METHOD is 'ssh' but GIT_BASE_URL is not SSH format"
+                echo "Current GIT_BASE_URL: $GIT_BASE_URL"
                 echo "For SSH auth, use SSH URLs like: git@github.com:org-name"
                 exit 1
             fi
             
-            log_info "Git authentication configured using SSH keys"
+            log_info "✓ Git authentication configured using SSH keys"
             ;;
             
         none)
@@ -200,9 +220,9 @@ create_pull_request() {
     local repo_name=$1
     local owner_repo=$(extract_owner_repo "$repo_name")
     
-    if [ -z "$GIT_TOKEN" ]; then
-        log_warning "GIT_TOKEN not set. Skipping PR creation."
-        log_info "To create PRs automatically, set GIT_TOKEN environment variable or update the script."
+    if [ -z "$GIT_AUTH_TOKEN" ]; then
+        log_warning "GIT_AUTH_TOKEN not set. Skipping PR creation."
+        log_info "To create PRs automatically, set GIT_AUTH_TOKEN environment variable."
         echo ""  # Return empty string
         return 0
     fi
@@ -235,7 +255,7 @@ create_github_pr() {
     local repo=$1
     
     local response=$(curl -s -X POST \
-        -H "Authorization: token $GIT_TOKEN" \
+        -H "Authorization: token $GIT_AUTH_TOKEN" \
         -H "Accept: application/vnd.github.v3+json" \
         "https://api.github.com/repos/$repo/pulls" \
         -d @- <<EOF
@@ -271,7 +291,7 @@ create_gitlab_pr() {
     local gitlab_url="https://gitlab.com"
     
     local response=$(curl -s -X POST \
-        -H "PRIVATE-TOKEN: $GIT_TOKEN" \
+        -H "PRIVATE-TOKEN: $GIT_AUTH_TOKEN" \
         -H "Content-Type: application/json" \
         "$gitlab_url/api/v4/projects/$encoded_repo/merge_requests" \
         -d @- <<EOF
@@ -303,7 +323,7 @@ create_bitbucket_pr() {
     
     # Bitbucket API v2.0
     local response=$(curl -s -X POST \
-        -u "$GIT_TOKEN" \
+        -u "$GIT_AUTH_TOKEN" \
         -H "Content-Type: application/json" \
         "https://api.bitbucket.org/2.0/repositories/$repo/pullrequests" \
         -d @- <<EOF
@@ -342,30 +362,48 @@ perform_replacements() {
     local repo_path=$1
     
     log_info "Performing string replacements..."
+    log_info "File patterns: $FILE_PATTERNS"
+    log_info "Number of replacement rules: ${#REPLACEMENTS[@]}"
     
     local changes_made=false
+    local files_found=0
+    local files_modified=0
     
     for replacement in "${REPLACEMENTS[@]}"; do
         IFS='|' read -r search_str replace_str <<< "$replacement"
         
         log_info "  Replacing '$search_str' with '$replace_str'"
         
+        # Count files that will be searched
+        local file_count=0
+        
         # Find all files matching patterns (excluding .git directory)
         while IFS= read -r -d '' file; do
+            files_found=$((files_found + 1))
+            
             # Check if file is a text file (not binary)
             if file "$file" | grep -q text; then
                 # Perform replacement using sed
                 if grep -q "$search_str" "$file" 2>/dev/null; then
                     sed -i "s|$search_str|$replace_str|g" "$file"
-                    log_info "    Updated: $file"
+                    log_info "    ✓ Updated: $file"
                     changes_made=true
+                    files_modified=$((files_modified + 1))
                 fi
+            else
+                log_info "    ⊘ Skipped (binary): $file"
             fi
         done < <(find "$repo_path" -type f -not -path "*/.git/*" -name "$FILE_PATTERNS" -print0)
     done
     
+    log_info "Search complete: Found $files_found files, modified $files_modified files"
+    
     if [ "$changes_made" = false ]; then
         log_warning "No changes were made in this repository"
+        log_info "This could mean:"
+        log_info "  - Search strings don't exist in any files"
+        log_info "  - FILE_PATTERNS doesn't match any files"
+        log_info "  - All matching files are binary"
         return 2  # Return 2 to indicate no changes
     fi
     
@@ -378,18 +416,58 @@ process_repo() {
     local git_url=$(generate_git_url "$repo_name")
     local repo_path="$WORK_DIR/$repo_name"
     
-    log_info "========================================="
-    log_info "Processing repository: $repo_name"
     log_info "Git URL: $git_url"
-    log_info "========================================="
+    log_info "Local path: $repo_path"
+    log_info ""
     
     # Clone the repository
     log_info "Cloning repository..."
-    if ! git clone "$git_url" "$repo_path" 2>&1 | grep -v "^Cloning into"; then
-        log_error "Failed to clone $repo_name"
-        log_failed_repo "$repo_name" "Failed to clone repository"
+    log_info "Running: git clone $git_url $repo_path"
+    
+    # Capture both stdout and stderr separately
+    local clone_output
+    local clone_exit_code
+    
+    clone_output=$(git clone "$git_url" "$repo_path" 2>&1)
+    clone_exit_code=$?
+    
+    # Show the output
+    echo "$clone_output"
+    
+    # Check if clone was successful
+    if [ $clone_exit_code -ne 0 ]; then
+        log_error "Failed to clone $repo_name (exit code: $clone_exit_code)"
+        log_error "Git output: $clone_output"
+        
+        # Try to determine specific error
+        if echo "$clone_output" | grep -q "Authentication failed\|invalid username or password"; then
+            log_failed_repo "$repo_name" "Authentication failed - check GIT_AUTH_TOKEN and GIT_USERNAME"
+        elif echo "$clone_output" | grep -q "Repository not found\|does not exist"; then
+            log_failed_repo "$repo_name" "Repository not found - check repo name and permissions"
+        elif echo "$clone_output" | grep -q "Permission denied"; then
+            log_failed_repo "$repo_name" "Permission denied - check repository access permissions"
+        elif echo "$clone_output" | grep -q "Could not resolve host"; then
+            log_failed_repo "$repo_name" "Network error - could not resolve host"
+        else
+            log_failed_repo "$repo_name" "Clone failed - $clone_output"
+        fi
         return 1
     fi
+    
+    # Verify the directory was created and has content
+    if [ ! -d "$repo_path" ]; then
+        log_error "Clone appeared successful but directory not found: $repo_path"
+        log_failed_repo "$repo_name" "Directory not created after clone"
+        return 1
+    fi
+    
+    if [ ! -d "$repo_path/.git" ]; then
+        log_error "Clone appeared successful but .git directory not found"
+        log_failed_repo "$repo_name" "Not a valid git repository after clone"
+        return 1
+    fi
+    
+    log_info "Successfully cloned $repo_name"
     
     cd "$repo_path" || {
         log_failed_repo "$repo_name" "Failed to change directory"
@@ -398,12 +476,31 @@ process_repo() {
     
     # Create and checkout new branch
     log_info "Creating branch: $BRANCH_NAME"
-    if ! git checkout -b "$BRANCH_NAME" 2>&1 | grep -v "^Switched to"; then
-        log_error "Failed to create branch $BRANCH_NAME"
-        log_failed_repo "$repo_name" "Failed to create branch"
+    log_info "Running: git checkout -b $BRANCH_NAME"
+    
+    local checkout_output
+    local checkout_exit_code
+    
+    checkout_output=$(git checkout -b "$BRANCH_NAME" 2>&1)
+    checkout_exit_code=$?
+    
+    echo "$checkout_output"
+    
+    if [ $checkout_exit_code -ne 0 ]; then
+        log_error "Failed to create branch $BRANCH_NAME (exit code: $checkout_exit_code)"
+        log_error "Git output: $checkout_output"
+        
+        # Check for specific errors
+        if echo "$checkout_output" | grep -q "already exists"; then
+            log_failed_repo "$repo_name" "Branch '$BRANCH_NAME' already exists"
+        else
+            log_failed_repo "$repo_name" "Failed to create branch - $checkout_output"
+        fi
         cd - > /dev/null
         return 1
     fi
+    
+    log_info "Successfully created and checked out branch: $BRANCH_NAME"
     
     # Perform replacements
     local replacement_status=0
@@ -431,21 +528,65 @@ process_repo() {
     
     # Commit changes
     log_info "Creating commit..."
-    if ! git commit -m "$COMMIT_MESSAGE" > /dev/null 2>&1; then
-        log_error "Failed to commit changes"
-        log_failed_repo "$repo_name" "Failed to commit changes"
+    log_info "Running: git commit -m \"...\""
+    
+    local commit_output
+    local commit_exit_code
+    
+    commit_output=$(git commit -m "$COMMIT_MESSAGE" 2>&1)
+    commit_exit_code=$?
+    
+    echo "$commit_output"
+    
+    if [ $commit_exit_code -ne 0 ]; then
+        log_error "Failed to commit changes (exit code: $commit_exit_code)"
+        log_error "Git output: $commit_output"
+        
+        if echo "$commit_output" | grep -q "nothing to commit"; then
+            log_warning "No changes to commit (this shouldn't happen - already checked)"
+            log_completed_repo "$repo_name" "" "no_changes"
+        else
+            log_failed_repo "$repo_name" "Commit failed - $commit_output"
+        fi
         cd - > /dev/null
         return 1
     fi
     
+    log_info "Successfully created commit"
+    
     # Push to remote
     log_info "Pushing branch to remote..."
-    if ! git push -u origin "$BRANCH_NAME" 2>&1 | grep -v "^To\|^remote:\|^branch"; then
-        log_error "Failed to push branch to remote"
-        log_failed_repo "$repo_name" "Failed to push to remote"
+    log_info "Running: git push -u origin $BRANCH_NAME"
+    
+    local push_output
+    local push_exit_code
+    
+    push_output=$(git push -u origin "$BRANCH_NAME" 2>&1)
+    push_exit_code=$?
+    
+    echo "$push_output"
+    
+    if [ $push_exit_code -ne 0 ]; then
+        log_error "Failed to push branch to remote (exit code: $push_exit_code)"
+        log_error "Git output: $push_output"
+        
+        # Check for specific errors
+        if echo "$push_output" | grep -q "Authentication failed\|invalid username or password"; then
+            log_failed_repo "$repo_name" "Push authentication failed - check GIT_AUTH_TOKEN"
+        elif echo "$push_output" | grep -q "Permission denied\|insufficient permission"; then
+            log_failed_repo "$repo_name" "Permission denied - check write access to repository"
+        elif echo "$push_output" | grep -q "remote rejected"; then
+            log_failed_repo "$repo_name" "Remote rejected push - check branch protection rules"
+        elif echo "$push_output" | grep -q "Could not resolve host"; then
+            log_failed_repo "$repo_name" "Network error - could not resolve host"
+        else
+            log_failed_repo "$repo_name" "Push failed - $push_output"
+        fi
         cd - > /dev/null
         return 1
     fi
+    
+    log_info "Successfully pushed branch to remote"
     
     # Create Pull Request if enabled
     local pr_url=""
@@ -471,13 +612,35 @@ process_repo() {
 # ============================================================================
 
 main() {
-    log_info "Starting repo batch update script"
+    log_info "========================================="
+    log_info "Repo Batch Update Script"
+    log_info "========================================="
+    log_info "Starting at: $(date '+%Y-%m-%d %H:%M:%S')"
+    log_info ""
+    
+    log_info "Configuration:"
+    log_info "  Config file: $CONFIG_FILE"
+    log_info "  Repo list: $REPO_LIST_FILE"
+    log_info "  Branch name: $BRANCH_NAME"
+    log_info "  Base URL: $GIT_BASE_URL"
+    log_info "  Work directory: $WORK_DIR"
+    log_info "  Log file: $LOG_FILE"
+    log_info "  File patterns: $FILE_PATTERNS"
+    log_info "  Create PR: $CREATE_PR"
+    if [ "$CREATE_PR" = true ]; then
+        log_info "  PR platform: $GIT_PLATFORM"
+        log_info "  PR base branch: $PR_BASE_BRANCH"
+    fi
+    log_info ""
     
     # Set up Git authentication
     setup_git_auth
+    log_info ""
     
     # Initialize log file with header
     echo -e "Repository\tResult" > "$LOG_FILE"
+    log_info "Initialized log file: $LOG_FILE"
+    log_info ""
     
     # Check if repo list file exists
     if [ ! -f "$REPO_LIST_FILE" ]; then
@@ -486,8 +649,15 @@ main() {
         exit 1
     fi
     
+    # Count repos in file
+    local repo_count=$(grep -v "^#\|^$" "$REPO_LIST_FILE" | wc -l | xargs)
+    log_info "Found $repo_count repositories to process"
+    log_info ""
+    
     # Create working directory
     mkdir -p "$WORK_DIR"
+    log_info "Working directory: $WORK_DIR"
+    log_info ""
     
     # Read repo names and process each one
     local total_repos=0
@@ -504,11 +674,16 @@ main() {
         
         total_repos=$((total_repos + 1))
         
+        log_info "========================================="
+        log_info "Repository $total_repos of $repo_count: $repo_name"
+        log_info "========================================="
+        
         # Process repo and capture return code
         if process_repo "$repo_name"; then
             successful_repos=$((successful_repos + 1))
         else
             failed_repos=$((failed_repos + 1))
+            log_warning "Failed to process $repo_name"
             log_warning "Continuing with next repository..."
         fi
         
@@ -519,6 +694,7 @@ main() {
     log_info "========================================="
     log_info "SUMMARY"
     log_info "========================================="
+    log_info "Completed at: $(date '+%Y-%m-%d %H:%M:%S')"
     log_info "Total repositories: $total_repos"
     log_info "Successful: $successful_repos"
     log_info "Failed: $failed_repos"
@@ -526,11 +702,17 @@ main() {
     log_info "Detailed log saved to: $LOG_FILE"
     
     # Clean up Git authentication
+    log_info ""
     cleanup_git_auth
     
     # Exit with error if any repos failed, but don't prevent completion
     if [ $failed_repos -gt 0 ]; then
-        log_warning "Some repositories failed. Check the log file for details."
+        log_warning ""
+        log_warning "⚠️  $failed_repos repositories failed. Check the log file for details."
+        log_warning "Failed repos are logged with specific error messages."
+    else
+        log_info ""
+        log_info "✓ All repositories processed successfully!"
     fi
 }
 
