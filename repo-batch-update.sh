@@ -30,9 +30,97 @@ if [ -z "$REPO_LIST_FILE" ] || [ -z "$BRANCH_NAME" ] || [ -z "$GIT_BASE_URL" ]; 
     exit 1
 fi
 
+# Validate authentication configuration
+if [ -z "$GIT_AUTH_METHOD" ]; then
+    echo "ERROR: GIT_AUTH_METHOD not set in $CONFIG_FILE"
+    echo "Set to 'token', 'ssh', or 'none'"
+    exit 1
+fi
+
 # ============================================================================
 # SCRIPT LOGIC (DO NOT EDIT BELOW THIS LINE)
 # ============================================================================
+
+# Function to set up Git authentication
+setup_git_auth() {
+    case $GIT_AUTH_METHOD in
+        token)
+            if [ -z "$GIT_AUTH_TOKEN" ]; then
+                echo "ERROR: GIT_AUTH_METHOD is 'token' but GIT_AUTH_TOKEN is not set"
+                echo "Set GIT_AUTH_TOKEN in config.sh or as environment variable"
+                exit 1
+            fi
+            
+            if [ -z "$GIT_USERNAME" ]; then
+                echo "ERROR: GIT_AUTH_METHOD is 'token' but GIT_USERNAME is not set"
+                echo "Set GIT_USERNAME in config.sh"
+                exit 1
+            fi
+            
+            # Configure Git credential helper to use the token
+            # This sets up authentication for HTTPS URLs
+            git config --global credential.helper store
+            
+            # Extract the host from GIT_BASE_URL
+            local git_host=""
+            if [[ $GIT_BASE_URL == https://* ]]; then
+                git_host=$(echo "$GIT_BASE_URL" | sed 's|https://||' | sed 's|/.*||')
+            elif [[ $GIT_BASE_URL == http://* ]]; then
+                git_host=$(echo "$GIT_BASE_URL" | sed 's|http://||' | sed 's|/.*||')
+            else
+                echo "ERROR: GIT_AUTH_METHOD is 'token' but GIT_BASE_URL is not HTTPS"
+                echo "For token auth, use https:// URLs like: https://github.com/org-name"
+                exit 1
+            fi
+            
+            # Store credentials in Git credential store
+            # This creates/updates ~/.git-credentials
+            echo "https://${GIT_USERNAME}:${GIT_AUTH_TOKEN}@${git_host}" > ~/.git-credentials-batch-temp
+            git config --global credential.helper "store --file ~/.git-credentials-batch-temp"
+            
+            log_info "Git authentication configured using token for ${git_host}"
+            ;;
+            
+        ssh)
+            # Check if SSH agent is running and has keys
+            if ! ssh-add -l &>/dev/null; then
+                echo "ERROR: GIT_AUTH_METHOD is 'ssh' but no SSH keys are loaded"
+                echo "Please run: ssh-add ~/.ssh/id_rsa (or your key file)"
+                echo "Or start ssh-agent: eval \$(ssh-agent -s) && ssh-add"
+                exit 1
+            fi
+            
+            if [[ $GIT_BASE_URL != git@* ]]; then
+                echo "ERROR: GIT_AUTH_METHOD is 'ssh' but GIT_BASE_URL is not SSH format"
+                echo "For SSH auth, use SSH URLs like: git@github.com:org-name"
+                exit 1
+            fi
+            
+            log_info "Git authentication configured using SSH keys"
+            ;;
+            
+        none)
+            log_warning "Git authentication disabled - only public repos will work"
+            ;;
+            
+        *)
+            echo "ERROR: Invalid GIT_AUTH_METHOD: $GIT_AUTH_METHOD"
+            echo "Valid values: 'token', 'ssh', 'none'"
+            exit 1
+            ;;
+    esac
+}
+
+# Function to clean up Git authentication
+cleanup_git_auth() {
+    if [ "$GIT_AUTH_METHOD" = "token" ]; then
+        # Remove temporary credentials file
+        rm -f ~/.git-credentials-batch-temp
+        # Reset to default credential helper
+        git config --global --unset credential.helper
+        log_info "Git authentication cleaned up"
+    fi
+}
 
 # Colors for output
 RED='\033[0;31m'
@@ -385,12 +473,16 @@ process_repo() {
 main() {
     log_info "Starting repo batch update script"
     
+    # Set up Git authentication
+    setup_git_auth
+    
     # Initialize log file with header
     echo -e "Repository\tResult" > "$LOG_FILE"
     
     # Check if repo list file exists
     if [ ! -f "$REPO_LIST_FILE" ]; then
         log_error "Repo list file not found: $REPO_LIST_FILE"
+        cleanup_git_auth
         exit 1
     fi
     
@@ -432,6 +524,9 @@ main() {
     log_info "Failed: $failed_repos"
     log_info ""
     log_info "Detailed log saved to: $LOG_FILE"
+    
+    # Clean up Git authentication
+    cleanup_git_auth
     
     # Exit with error if any repos failed, but don't prevent completion
     if [ $failed_repos -gt 0 ]; then
