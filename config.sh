@@ -7,6 +7,33 @@
 # This file is sourced by repo_batch_update.sh
 # ============================================================================
 
+# ============================================================================
+# GIT AUTHENTICATION CONFIGURATION
+# ============================================================================
+
+# Git authentication method: "token", "ssh", or "none"
+# - "token": Uses GitHub/GitLab personal access token for HTTPS authentication
+# - "ssh": Uses SSH keys (requires SSH agent to be running with keys loaded)
+# - "none": No authentication (for public repos only)
+GIT_AUTH_METHOD="token"
+
+# Git username for HTTPS authentication (only needed if GIT_AUTH_METHOD="token")
+# For GitHub: your GitHub username
+# For GitLab: your GitLab username
+# For Bitbucket: your Bitbucket username
+GIT_USERNAME="your-username"
+
+# Git token for HTTPS authentication (only needed if GIT_AUTH_METHOD="token")
+# Can also be set via environment variable: export GIT_AUTH_TOKEN="your_token"
+# For GitHub: Create at https://github.com/settings/tokens (needs 'repo' scope)
+# For GitLab: Create at https://gitlab.com/-/profile/personal_access_tokens (needs 'read_repository' scope)
+# For Bitbucket: Use app password from https://bitbucket.org/account/settings/app-passwords/
+GIT_AUTH_TOKEN="${GIT_AUTH_TOKEN:-}"
+
+# ============================================================================
+# REPOSITORY CONFIGURATION
+# ============================================================================
+
 # File containing repo names (one per line)
 REPO_LIST_FILE="repos.txt"
 
@@ -15,10 +42,11 @@ BRANCH_NAME="update-strings"
 
 # Git remote base URL (will be combined with repo name)
 # Examples:
-#   For GitHub: "https://github.com/username"
-#   For GitLab: "https://gitlab.com/username"
-#   For SSH: "git@github.com:username"
-GIT_BASE_URL="https://github.com/yourusername"
+#   For GitHub HTTPS: "https://github.com/org-name"
+#   For GitHub SSH: "git@github.com:org-name"
+#   For GitLab HTTPS: "https://gitlab.com/org-name"
+#   For GitLab SSH: "git@gitlab.com:org-name"
+GIT_BASE_URL="https://github.com/your-org"
 
 # Working directory for cloning repos (will be created if it doesn't exist)
 WORK_DIR="./repos_temp"
@@ -82,7 +110,7 @@ Refs: #1234"
 # Base branch to target for PR (usually 'main' or 'master')
 PR_BASE_BRANCH="main"
 
-# GitHub/GitLab/Bitbucket Personal Access Token
+# GitHub/GitLab/Bitbucket Personal Access Token for PR creation
 # For GitHub: Create at https://github.com/settings/tokens (needs 'repo' scope)
 # For GitLab: Create at https://gitlab.com/-/profile/personal_access_tokens (needs 'api' scope)
 # For Bitbucket: Create at https://bitbucket.org/account/settings/app-passwords/ (needs 'pullrequest:write' scope)
