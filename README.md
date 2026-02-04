@@ -23,6 +23,9 @@ A powerful bash script for automating bulk updates across multiple Git repositor
 - `curl` (for PR creation)
 - `sed` and `grep` (standard on most systems)
 - Write access to target repositories
+- **Authentication** for private repositories:
+  - Personal access token (for HTTPS), OR
+  - SSH keys loaded in ssh-agent (for SSH)
 - (Optional) Personal access token for PR creation
 
 ## Quick Start
@@ -45,9 +48,21 @@ A powerful bash script for automating bulk updates across multiple Git repositor
    ```bash
    # Edit config.sh with your settings
    nano config.sh
+   
+   # Configure authentication (required for private repos)
+   # See AUTHENTICATION.md for detailed setup
    ```
 
-4. **Run the script:**
+4. **Set up authentication (for private/org repos):**
+   ```bash
+   # For token authentication
+   export GIT_AUTH_TOKEN="your_token_here"
+   
+   # For SSH authentication
+   ssh-add ~/.ssh/id_rsa
+   ```
+
+5. **Run the script:**
    ```bash
    ./repo_batch_update.sh
    ```
@@ -55,6 +70,53 @@ A powerful bash script for automating bulk updates across multiple Git repositor
 ## Configuration
 
 All settings are stored in a separate configuration file (`config.sh` by default). This allows you to update the script without losing your settings.
+
+### Git Authentication Configuration
+
+**Required for private repositories in organizations/groups**
+
+The script supports three authentication methods:
+
+#### Token Authentication (Recommended for Organizations)
+```bash
+# In config.sh
+GIT_AUTH_METHOD="token"
+GIT_USERNAME="your-username"
+GIT_AUTH_TOKEN="${GIT_AUTH_TOKEN:-}"  # Set via environment variable
+GIT_BASE_URL="https://github.com/your-org"
+```
+
+**Setup:**
+1. Create personal access token:
+   - GitHub: https://github.com/settings/tokens (needs `repo` scope)
+   - GitLab: https://gitlab.com/-/profile/personal_access_tokens (needs `read_repository` + `write_repository`)
+2. Set as environment variable:
+   ```bash
+   export GIT_AUTH_TOKEN="your_token_here"
+   ./repo_batch_update.sh
+   ```
+
+#### SSH Authentication
+```bash
+# In config.sh
+GIT_AUTH_METHOD="ssh"
+GIT_BASE_URL="git@github.com:your-org"
+```
+
+**Setup:**
+```bash
+# Ensure SSH keys are loaded
+ssh-add -l  # Check if keys are loaded
+eval $(ssh-agent -s) && ssh-add ~/.ssh/id_rsa  # Load keys if needed
+./repo_batch_update.sh
+```
+
+#### No Authentication (Public Repos Only)
+```bash
+GIT_AUTH_METHOD="none"
+```
+
+**For detailed authentication setup, see [AUTHENTICATION.md](AUTHENTICATION.md)**
 
 ### Configuration File Structure
 
