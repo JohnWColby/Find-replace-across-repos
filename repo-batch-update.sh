@@ -549,21 +549,36 @@ process_repo() {
     
     echo "$checkout_output"
     
-    if [ $checkout_exit_code -ne 0 ]; then
-        log_error "Failed to create branch $BRANCH_NAME (exit code: $checkout_exit_code)"
-        log_error "Git output: $checkout_output"
-        
-        # Check for specific errors
+   if [ $checkout_exit_code -ne 0 ]; then
+        # Check if branch already exists
         if echo "$checkout_output" | grep -q "already exists"; then
-            log_failed_repo "$repo_name" "Branch '$BRANCH_NAME' already exists"
+            log_warning "Branch '$BRANCH_NAME' already exists, checking it out instead..."
+            
+            # Checkout existing branch
+            checkout_output=$(git checkout "$BRANCH_NAME" 2>&1)
+            checkout_exit_code=$?
+            
+            echo "$checkout_output"
+            
+            if [ $checkout_exit_code -ne 0 ]; then
+                log_error "Failed to checkout existing branch $BRANCH_NAME (exit code: $checkout_exit_code)"
+                log_error "Git output: $checkout_output"
+                log_failed_repo "$repo_name" "Failed to checkout existing branch - $checkout_output"
+                cd - > /dev/null
+                return 1
+            fi
+            
+            log_info "Successfully checked out existing branch: $BRANCH_NAME"
         else
+            log_error "Failed to create branch $BRANCH_NAME (exit code: $checkout_exit_code)"
+            log_error "Git output: $checkout_output"
             log_failed_repo "$repo_name" "Failed to create branch - $checkout_output"
+            cd - > /dev/null
+            return 1
         fi
-        cd - > /dev/null
-        return 1
+    else
+        log_info "Successfully created and checked out branch: $BRANCH_NAME"
     fi
-    
-    log_info "Successfully created and checked out branch: $BRANCH_NAME"
     
     # Perform replacements
     local replacement_status=0
