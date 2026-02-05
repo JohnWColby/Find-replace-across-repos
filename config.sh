@@ -76,6 +76,11 @@ declare -a REPLACEMENTS=(
     "TODO: update this|DONE: updated"
 )
 
+# Case sensitivity for find/replace operations (true/false)
+# true = Case-sensitive (default): "API" matches "API" but not "api" or "Api"
+# false = Case-insensitive: "API" matches "API", "api", "Api", "aPi", etc.
+CASE_SENSITIVE=true
+
 # File extensions to process (leave as "*" to process all files)
 # Example: "*.py *.js *.md"
 FILE_PATTERNS="*"
@@ -110,9 +115,5 @@ Refs: #1234"
 # Base branch to target for PR (usually 'main' or 'master')
 PR_BASE_BRANCH="main"
 
-# GitHub/GitLab/Bitbucket Personal Access Token for PR creation
-# For GitHub: Create at https://github.com/settings/tokens (needs 'repo' scope)
-# For GitLab: Create at https://gitlab.com/-/profile/personal_access_tokens (needs 'api' scope)
-# For Bitbucket: Create at https://bitbucket.org/account/settings/app-passwords/ (needs 'pullrequest:write' scope)
-# You can also set this as an environment variable: export GIT_TOKEN="your_token_here"
-GIT_TOKEN="${GIT_TOKEN:-}"  # Will use environment variable if set, otherwise empty
+# NOTE: PR creation uses the same token as Git authentication (GIT_AUTH_TOKEN)
+# No separate token needed - the token with 'repo' scope can do both
