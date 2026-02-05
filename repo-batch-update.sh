@@ -364,46 +364,95 @@ perform_replacements() {
     log_info "Performing string replacements..."
     log_info "File patterns: $FILE_PATTERNS"
     log_info "Number of replacement rules: ${#REPLACEMENTS[@]}"
+    log_info ""
     
     local changes_made=false
     local files_found=0
     local files_modified=0
+    local total_replacements=0
     
     for replacement in "${REPLACEMENTS[@]}"; do
         IFS='|' read -r search_str replace_str <<< "$replacement"
         
-        log_info "  Replacing '$search_str' with '$replace_str'"
+        log_info "----------------------------------------"
+        log_info "Replacement rule: '$search_str' → '$replace_str'"
+        log_info "----------------------------------------"
         
-        # Count files that will be searched
-        local file_count=0
+        local rule_files_modified=0
+        local rule_replacements=0
         
         # Find all files matching patterns (excluding .git directory)
         while IFS= read -r -d '' file; do
             files_found=$((files_found + 1))
             
             # Check if file is a text file (not binary)
-            if file "$file" | grep -q text; then
-                # Perform replacement using sed
-                if grep -q "$search_str" "$file" 2>/dev/null; then
-                    sed -i "s|$search_str|$replace_str|g" "$file"
-                    log_info "    ✓ Updated: $file"
-                    changes_made=true
-                    files_modified=$((files_modified + 1))
-                fi
-            else
-                log_info "    ⊘ Skipped (binary): $file"
+            if ! file "$file" | grep -q text; then
+                log_info "  ⊘ Skipped (binary): ${file#$repo_path/}"
+                continue
+            fi
+            
+            # Check if file contains the search string
+            if ! grep -q "$search_str" "$file" 2>/dev/null; then
+                continue
+            fi
+            
+            # Count occurrences before replacement
+            local occurrences=$(grep -o "$search_str" "$file" 2>/dev/null | wc -l | xargs)
+            
+            if [ "$occurrences" -gt 0 ]; then
+                log_info "  📝 File: ${file#$repo_path/}"
+                log_info "     Occurrences found: $occurrences"
+                
+                # Show all matches with context
+                while IFS= read -r line_num; do
+                    local line_content=$(sed -n "${line_num}p" "$file")
+                    # Truncate long lines
+                    if [ ${#line_content} -gt 100 ]; then
+                        line_content="${line_content:0:100}..."
+                    fi
+                    
+                    log_info "     Line $line_num: $line_content"
+                done < <(grep -n "$search_str" "$file" 2>/dev/null | cut -d: -f1)
+                
+                # Perform replacement
+                sed -i "s|$search_str|$replace_str|g" "$file"
+                
+                log_info "     ✓ Replaced $occurrences occurrence(s)"
+                
+                changes_made=true
+                files_modified=$((files_modified + 1))
+                rule_files_modified=$((rule_files_modified + 1))
+                rule_replacements=$((rule_replacements + occurrences))
+                total_replacements=$((total_replacements + occurrences))
             fi
         done < <(find "$repo_path" -type f -not -path "*/.git/*" -name "$FILE_PATTERNS" -print0)
+        
+        if [ $rule_files_modified -eq 0 ]; then
+            log_info "  ⊘ No matches found for this rule"
+        else
+            log_info ""
+            log_info "  Summary for this rule:"
+            log_info "    Files modified: $rule_files_modified"
+            log_info "    Total replacements: $rule_replacements"
+        fi
+        log_info ""
     done
     
-    log_info "Search complete: Found $files_found files, modified $files_modified files"
+    log_info "========================================"
+    log_info "REPLACEMENT SUMMARY"
+    log_info "========================================"
+    log_info "Total files searched: $files_found"
+    log_info "Total files modified: $files_modified"
+    log_info "Total replacements made: $total_replacements"
+    log_info ""
     
     if [ "$changes_made" = false ]; then
         log_warning "No changes were made in this repository"
-        log_info "This could mean:"
+        log_info "Possible reasons:"
         log_info "  - Search strings don't exist in any files"
-        log_info "  - FILE_PATTERNS doesn't match any files"
+        log_info "  - FILE_PATTERNS ($FILE_PATTERNS) doesn't match any files"
         log_info "  - All matching files are binary"
+        log_info ""
         return 2  # Return 2 to indicate no changes
     fi
     
