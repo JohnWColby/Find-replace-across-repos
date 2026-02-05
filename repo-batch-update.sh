@@ -363,7 +363,21 @@ perform_replacements() {
     
     log_info "Performing string replacements..."
     log_info "File patterns: $FILE_PATTERNS"
+    log_info "Case sensitive: $CASE_SENSITIVE"
     log_info "Number of replacement rules: ${#REPLACEMENTS[@]}"
+    log_info ""
+    
+    # Set grep and sed flags based on case sensitivity
+    local grep_flags=""
+    local sed_flags="g"
+    
+    if [ "$CASE_SENSITIVE" = false ]; then
+        grep_flags="-i"
+        sed_flags="gI"
+        log_info "Using case-insensitive matching"
+    else
+        log_info "Using case-sensitive matching"
+    fi
     log_info ""
     
     local changes_made=false
@@ -391,19 +405,19 @@ perform_replacements() {
                 continue
             fi
             
-            # Check if file contains the search string
-            if ! grep -q "$search_str" "$file" 2>/dev/null; then
+            # Check if file contains the search string (with case sensitivity setting)
+            if ! grep $grep_flags -q "$search_str" "$file" 2>/dev/null; then
                 continue
             fi
             
-            # Count occurrences before replacement
-            local occurrences=$(grep -o "$search_str" "$file" 2>/dev/null | wc -l | xargs)
+            # Count occurrences before replacement (with case sensitivity setting)
+            local occurrences=$(grep $grep_flags -o "$search_str" "$file" 2>/dev/null | wc -l | xargs)
             
             if [ "$occurrences" -gt 0 ]; then
                 log_info "  📝 File: ${file#$repo_path/}"
                 log_info "     Occurrences found: $occurrences"
                 
-                # Show all matches with context
+                # Show all matches with context (with case sensitivity setting)
                 while IFS= read -r line_num; do
                     local line_content=$(sed -n "${line_num}p" "$file")
                     # Truncate long lines
@@ -412,10 +426,10 @@ perform_replacements() {
                     fi
                     
                     log_info "     Line $line_num: $line_content"
-                done < <(grep -n "$search_str" "$file" 2>/dev/null | cut -d: -f1)
+                done < <(grep $grep_flags -n "$search_str" "$file" 2>/dev/null | cut -d: -f1)
                 
-                # Perform replacement
-                sed -i "s|$search_str|$replace_str|g" "$file"
+                # Perform replacement (with case sensitivity setting)
+                sed -i "s|$search_str|$replace_str|$sed_flags" "$file"
                 
                 log_info "     ✓ Replaced $occurrences occurrence(s)"
                 
