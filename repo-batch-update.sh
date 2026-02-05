@@ -220,24 +220,34 @@ create_pull_request() {
     local repo_name=$1
     local owner_repo=$(extract_owner_repo "$repo_name")
     
+    log_info "Preparing to create PR..."
+    log_info "Repository: $owner_repo"
+    log_info "Platform: $GIT_PLATFORM"
+    log_info "Branch: $BRANCH_NAME → $PR_BASE_BRANCH"
+    log_info ""
+    
     if [ -z "$GIT_AUTH_TOKEN" ]; then
         log_warning "GIT_AUTH_TOKEN not set. Skipping PR creation."
         log_info "To create PRs automatically, set GIT_AUTH_TOKEN environment variable."
         echo ""  # Return empty string
-        return 0
+        return 1
     fi
     
-    log_info "Creating Pull Request..."
+    log_info "Token available: ${GIT_AUTH_TOKEN:0:10}... (truncated)"
+    log_info ""
     
     local pr_url=""
     case $GIT_PLATFORM in
         github)
+            log_info "Using GitHub API..."
             pr_url=$(create_github_pr "$owner_repo")
             ;;
         gitlab)
+            log_info "Using GitLab API..."
             pr_url=$(create_gitlab_pr "$owner_repo")
             ;;
         bitbucket)
+            log_info "Using Bitbucket API..."
             pr_url=$(create_bitbucket_pr "$owner_repo")
             ;;
         *)
@@ -247,14 +257,27 @@ create_pull_request() {
             ;;
     esac
     
-    echo "$pr_url"  # Return the PR URL
+    if [ -n "$pr_url" ]; then
+        echo "$pr_url"
+        return 0
+    else
+        echo ""
+        return 1
+    fi
 }
 
 # Function to create GitHub PR
 create_github_pr() {
     local repo=$1
     
-    local response=$(curl -s -X POST \
+    log_info "Creating GitHub PR for: $repo"
+    log_info "API endpoint: https://api.github.com/repos/$repo/pulls"
+    log_info "PR title: $PR_TITLE"
+    log_info "Source branch: $BRANCH_NAME"
+    log_info "Target branch: $PR_BASE_BRANCH"
+    log_info ""
+    
+    local response=$(curl -s -w "\nHTTP_STATUS:%{http_code}" -X POST \
         -H "Authorization: token $GIT_AUTH_TOKEN" \
         -H "Accept: application/vnd.github.v3+json" \
         "https://api.github.com/repos/$repo/pulls" \
@@ -268,16 +291,25 @@ create_github_pr() {
 EOF
 )
     
+    local http_status=$(echo "$response" | grep "HTTP_STATUS:" | cut -d: -f2)
+    local response_body=$(echo "$response" | sed '/HTTP_STATUS:/d')
+    
+    log_info "HTTP Status: $http_status"
+    log_info "API Response: $response_body"
+    log_info ""
+    
     # Check if PR was created successfully
-    local pr_url=$(echo "$response" | grep -o '"html_url": *"[^"]*"' | head -1 | sed 's/"html_url": *"\([^"]*\)"/\1/')
+    local pr_url=$(echo "$response_body" | grep -o '"html_url": *"[^"]*"' | head -1 | sed 's/"html_url": *"\([^"]*\)"/\1/')
     
     if [ -n "$pr_url" ]; then
         log_info "✓ Pull Request created: $pr_url"
         echo "$pr_url"  # Return the URL
         return 0
     else
-        local error_message=$(echo "$response" | grep -o '"message": *"[^"]*"' | sed 's/"message": *"\([^"]*\)"/\1/')
-        log_error "Failed to create PR: $error_message"
+        local error_message=$(echo "$response_body" | grep -o '"message": *"[^"]*"' | sed 's/"message": *"\([^"]*\)"/\1/')
+        log_error "Failed to create PR"
+        log_error "Error message: $error_message"
+        log_error "Full response: $response_body"
         return 1
     fi
 }
@@ -396,12 +428,35 @@ perform_replacements() {
         local rule_replacements=0
         
         # Find all files matching patterns (excluding .git directory)
+        # Build find command with multiple -name patterns if needed
+        local find_cmd="find . -type f -not -path '*/.git/*'"
+        
+        # Handle multiple file patterns (e.g., "*.py *.js")
+        if [ "$FILE_PATTERNS" = "*" ]; then
+            find_cmd="$find_cmd -name '*'"
+        else
+            # Split FILE_PATTERNS into individual patterns and add -o (OR) between them
+            local first_pattern=true
+            find_cmd="$find_cmd \\("
+            for pattern in $FILE_PATTERNS; do
+                if [ "$first_pattern" = true ]; then
+                    find_cmd="$find_cmd -name '$pattern'"
+                    first_pattern=false
+                else
+                    find_cmd="$find_cmd -o -name '$pattern'"
+                fi
+            done
+            find_cmd="$find_cmd \\)"
+        fi
+        
+        find_cmd="$find_cmd -print0"
+        
         while IFS= read -r -d '' file; do
             files_found=$((files_found + 1))
             
             # Check if file is a text file (not binary)
             if ! file "$file" | grep -q text; then
-                log_info "  ⊘ Skipped (binary): ${file#$repo_path/}"
+                log_info "  ⊘ Skipped (binary): ${file#./}"
                 continue
             fi
             
@@ -414,10 +469,9 @@ perform_replacements() {
             local occurrences=$(grep $grep_flags -o "$search_str" "$file" 2>/dev/null | wc -l | xargs)
             
             if [ "$occurrences" -gt 0 ]; then
-                log_info "  📝 File: ${file#$repo_path/}"
-                log_info "     Occurrences found: $occurrences"
+                log_info "  📝 File: ${file#./} ($occurrences occurrence(s))"
                 
-                # Show all matches with context (with case sensitivity setting)
+                # Show all matches with context
                 while IFS= read -r line_num; do
                     local line_content=$(sed -n "${line_num}p" "$file")
                     # Truncate long lines
@@ -431,7 +485,7 @@ perform_replacements() {
                 # Perform replacement (with case sensitivity setting)
                 sed -i "s|$search_str|$replace_str|$sed_flags" "$file"
                 
-                log_info "     ✓ Replaced $occurrences occurrence(s)"
+                log_info "     ✓ Replaced"
                 
                 changes_made=true
                 files_modified=$((files_modified + 1))
@@ -439,7 +493,7 @@ perform_replacements() {
                 rule_replacements=$((rule_replacements + occurrences))
                 total_replacements=$((total_replacements + occurrences))
             fi
-        done < <(find "$repo_path" -type f -not -path "*/.git/*" -name "$FILE_PATTERNS" -print0)
+        done < <(eval "$find_cmd")
         
         if [ $rule_files_modified -eq 0 ]; then
             log_info "  ⊘ No matches found for this rule"
@@ -549,7 +603,7 @@ process_repo() {
     
     echo "$checkout_output"
     
-   if [ $checkout_exit_code -ne 0 ]; then
+    if [ $checkout_exit_code -ne 0 ]; then
         # Check if branch already exists
         if echo "$checkout_output" | grep -q "already exists"; then
             log_warning "Branch '$BRANCH_NAME' already exists, checking it out instead..."
@@ -665,18 +719,27 @@ process_repo() {
     fi
     
     log_info "Successfully pushed branch to remote"
+    log_info ""
     
     # Create Pull Request if enabled
-    local pr_url=""
     if [ "$CREATE_PR" = true ]; then
+        log_info "========================================="
+        log_info "Creating Pull Request for $repo_name"
+        log_info "========================================="
+        
+        local pr_url
         pr_url=$(create_pull_request "$repo_name")
-        if [ -z "$pr_url" ]; then
+        local pr_exit_code=$?
+        
+        if [ $pr_exit_code -eq 0 ] && [ -n "$pr_url" ]; then
+            log_info "✓ Pull Request created successfully"
+            log_completed_repo "$repo_name" "$pr_url" "success"
+        else
             log_warning "Failed to create PR for $repo_name, but changes were pushed successfully"
             log_completed_repo "$repo_name" "" "pushed"
-        else
-            log_completed_repo "$repo_name" "$pr_url" "success"
         fi
     else
+        log_info "PR creation disabled (CREATE_PR=false)"
         log_completed_repo "$repo_name" "" "pushed"
     fi
     
