@@ -67,60 +67,96 @@ def load_config(config_file: str) -> Config:
     """Load configuration from bash config file"""
     log_info(f"Loading configuration from: {config_file}")
     
-    # Source the bash config file and extract variables
-    cmd = f'source {config_file} && env'
-    proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, shell=True, executable='/bin/bash')
-    env_output, _ = proc.communicate()
+    if not os.path.exists(config_file):
+        log_error(f"Config file not found: {config_file}")
+        sys.exit(1)
     
-    env_dict = {}
-    for line in env_output.decode().split('\n'):
-        if '=' in line:
-            key, value = line.split('=', 1)
-            env_dict[key] = value
-    
-    # Parse replacements array from the config file
+    # Read the config file directly instead of sourcing it
+    # This works on all platforms without needing bash
+    config_vars = {}
     replacements = []
-    with open(config_file, 'r') as f:
+    
+    with open(config_file, 'r', encoding='utf-8') as f:
         content = f.read()
-        # Extract REPLACEMENTS array
-        match = re.search(r'declare -a REPLACEMENTS=\((.*?)\)', content, re.DOTALL)
-        if match:
-            replacements_str = match.group(1)
-            for line in replacements_str.split('\n'):
-                line = line.strip().strip('"\'')
-                if '|' in line and not line.startswith('#'):
-                    search, replace = line.split('|', 1)
+    
+    # Extract REPLACEMENTS array
+    match = re.search(r'declare -a REPLACEMENTS=\((.*?)\)', content, re.DOTALL)
+    if match:
+        replacements_str = match.group(1)
+        for line in replacements_str.split('\n'):
+            line = line.strip().strip('"\'')
+            if '|' in line and not line.startswith('#') and line:
+                parts = line.split('|', 1)
+                if len(parts) == 2:
+                    search, replace = parts
                     replacements.append((search, replace))
     
+    # Extract simple variable assignments
+    for line in content.split('\n'):
+        line = line.strip()
+        
+        # Skip comments and empty lines
+        if not line or line.startswith('#'):
+            continue
+        
+        # Match variable assignments: VAR="value" or VAR='value' or VAR=value
+        match = re.match(r'^([A-Z_][A-Z0-9_]*)=(.+)$', line)
+        if match:
+            var_name = match.group(1)
+            var_value = match.group(2).strip()
+            
+            # Remove quotes if present
+            if (var_value.startswith('"') and var_value.endswith('"')) or \
+               (var_value.startswith("'") and var_value.endswith("'")):
+                var_value = var_value[1:-1]
+            
+            # Handle variable references like ${VAR:-default}
+            if var_value.startswith('${') and var_value.endswith('}'):
+                # Extract the variable name and default
+                inner = var_value[2:-1]
+                if ':-' in inner:
+                    env_var, default = inner.split(':-', 1)
+                    var_value = os.environ.get(env_var, default.strip('"\''))
+                else:
+                    env_var = inner
+                    var_value = os.environ.get(env_var, '')
+            
+            config_vars[var_name] = var_value
+    
     # Parse file patterns
-    file_patterns_str = env_dict.get('FILE_PATTERNS', '*')
+    file_patterns_str = config_vars.get('FILE_PATTERNS', '*')
     if file_patterns_str == '*':
         file_patterns = ['*']
     else:
         file_patterns = file_patterns_str.split()
     
     # Convert case sensitive to boolean
-    case_sensitive = env_dict.get('CASE_SENSITIVE', 'true').lower() == 'true'
-    create_pr = env_dict.get('CREATE_PR', 'false').lower() == 'true'
+    case_sensitive = config_vars.get('CASE_SENSITIVE', 'true').lower() == 'true'
+    create_pr = config_vars.get('CREATE_PR', 'false').lower() == 'true'
+    
+    # Get git auth token from environment if not in config
+    git_auth_token = config_vars.get('GIT_AUTH_TOKEN', '')
+    if not git_auth_token:
+        git_auth_token = os.environ.get('GIT_AUTH_TOKEN', '')
     
     return Config(
-        repo_list_file=env_dict.get('REPO_LIST_FILE', 'repos.txt'),
-        branch_name=env_dict.get('BRANCH_NAME', 'update-strings'),
-        git_base_url=env_dict.get('GIT_BASE_URL', ''),
-        work_dir=env_dict.get('WORK_DIR', './repos_temp'),
-        log_file=env_dict.get('LOG_FILE', './batch_update_log.txt'),
-        commit_message=env_dict.get('COMMIT_MESSAGE', ''),
+        repo_list_file=config_vars.get('REPO_LIST_FILE', 'repos.txt'),
+        branch_name=config_vars.get('BRANCH_NAME', 'update-strings'),
+        git_base_url=config_vars.get('GIT_BASE_URL', ''),
+        work_dir=config_vars.get('WORK_DIR', './repos_temp'),
+        log_file=config_vars.get('LOG_FILE', './batch_update_log.txt'),
+        commit_message=config_vars.get('COMMIT_MESSAGE', ''),
         replacements=replacements,
         file_patterns=file_patterns,
         case_sensitive=case_sensitive,
         create_pr=create_pr,
-        git_platform=env_dict.get('GIT_PLATFORM', 'github'),
-        pr_title=env_dict.get('PR_TITLE', ''),
-        pr_description=env_dict.get('PR_DESCRIPTION', ''),
-        pr_base_branch=env_dict.get('PR_BASE_BRANCH', 'main'),
-        git_auth_method=env_dict.get('GIT_AUTH_METHOD', 'token'),
-        git_username=env_dict.get('GIT_USERNAME', ''),
-        git_auth_token=env_dict.get('GIT_AUTH_TOKEN', ''),
+        git_platform=config_vars.get('GIT_PLATFORM', 'github'),
+        pr_title=config_vars.get('PR_TITLE', ''),
+        pr_description=config_vars.get('PR_DESCRIPTION', ''),
+        pr_base_branch=config_vars.get('PR_BASE_BRANCH', 'main'),
+        git_auth_method=config_vars.get('GIT_AUTH_METHOD', 'token'),
+        git_username=config_vars.get('GIT_USERNAME', ''),
+        git_auth_token=git_auth_token,
     )
 
 
