@@ -38,6 +38,11 @@ class Config:
     git_auth_method: str
     git_username: str
     git_auth_token: str
+    # Proxy settings
+    proxy_url: str = ""
+    proxy_username: str = ""
+    proxy_password: str = ""
+    use_proxy: bool = False
 
 
 class Colors:
@@ -188,6 +193,23 @@ def load_config(config_file: str) -> Config:
     if not git_auth_token:
         git_auth_token = os.environ.get('GIT_AUTH_TOKEN', '')
     
+    # Get proxy settings
+    proxy_url = config_vars.get('PROXY_URL', '')
+    if not proxy_url:
+        proxy_url = os.environ.get('PROXY_URL', '')
+    
+    proxy_username = config_vars.get('PROXY_USERNAME', '')
+    if not proxy_username:
+        proxy_username = os.environ.get('PROXY_USERNAME', '')
+    
+    proxy_password = config_vars.get('PROXY_PASSWORD', '')
+    if not proxy_password:
+        proxy_password = os.environ.get('PROXY_PASSWORD', '')
+    
+    use_proxy = config_vars.get('USE_PROXY', 'false').lower() == 'true'
+    if not use_proxy and proxy_url:
+        use_proxy = True  # Auto-enable if proxy URL is set
+    
     return Config(
         repo_list_file=config_vars.get('REPO_LIST_FILE', 'repos.txt'),
         branch_name=config_vars.get('BRANCH_NAME', 'update-strings'),
@@ -206,6 +228,10 @@ def load_config(config_file: str) -> Config:
         git_auth_method=config_vars.get('GIT_AUTH_METHOD', 'token'),
         git_username=config_vars.get('GIT_USERNAME', ''),
         git_auth_token=git_auth_token,
+        proxy_url=proxy_url,
+        proxy_username=proxy_username,
+        proxy_password=proxy_password,
+        use_proxy=use_proxy,
     )
 
 
@@ -279,12 +305,17 @@ def match_file_pattern(filepath: Path, patterns: List[str]) -> bool:
     return False
 
 
-def perform_replacements(repo_path: Path, config: Config) -> Tuple[int, int, int, List[Dict]]:
+def perform_replacements(config: Config) -> Tuple[int, int, int, List[Dict]]:
     """
     Perform all replacements in the repository.
+    Uses current working directory as repo path.
     Returns: (files_searched, files_modified, total_replacements, change_details)
     """
+    # Use current directory as the repo path
+    repo_path = Path.cwd()
+    
     log_info("Performing string replacements...")
+    log_info(f"Working directory: {repo_path}")
     log_info(f"File patterns: {' '.join(config.file_patterns)}")
     log_info(f"Case sensitive: {config.case_sensitive}")
     log_info(f"Number of replacement rules: {len(config.replacements)}")
@@ -316,6 +347,12 @@ def perform_replacements(repo_path: Path, config: Config) -> Tuple[int, int, int
     
     if files_searched == 0:
         log_warning("No files found matching patterns!")
+        log_info(f"Current directory: {repo_path}")
+        log_info(f"Patterns: {config.file_patterns}")
+        # Show what's in current directory
+        log_info("Files in current directory:")
+        for item in list(repo_path.iterdir())[:10]:
+            log_info(f"  {item.name}")
         return 0, 0, 0, []
     
     log_info("")
@@ -434,7 +471,7 @@ def perform_replacements(repo_path: Path, config: Config) -> Tuple[int, int, int
 
 
 def create_github_pr(config: Config, owner_repo: str) -> Optional[str]:
-    """Create GitHub Pull Request"""
+    """Create GitHub Pull Request with optional NTLM proxy support"""
     log_info(f"Creating GitHub PR for: {owner_repo}")
     
     url = f"https://api.github.com/repos/{owner_repo}/pulls"
@@ -462,10 +499,61 @@ def create_github_pr(config: Config, owner_repo: str) -> Optional[str]:
     log_info(f"Source branch: {config.branch_name}")
     log_info(f"Target branch: {config.pr_base_branch}")
     log_info(f"Token (first 10 chars): {config.git_auth_token[:10]}...")
+    
+    # Set up proxy if configured
+    proxies = None
+    if config.use_proxy and config.proxy_url:
+        log_info(f"Using proxy: {config.proxy_url}")
+        log_info(f"Proxy username: {config.proxy_username}")
+        
+        # Format proxy URL with credentials for NTLM
+        if config.proxy_username and config.proxy_password:
+            # Parse proxy URL
+            from urllib.parse import urlparse, urlunparse
+            parsed = urlparse(config.proxy_url)
+            
+            # Add credentials to proxy URL
+            netloc_with_auth = f"{config.proxy_username}:{config.proxy_password}@{parsed.netloc}"
+            proxy_url_with_auth = urlunparse((
+                parsed.scheme,
+                netloc_with_auth,
+                parsed.path,
+                parsed.params,
+                parsed.query,
+                parsed.fragment
+            ))
+            
+            proxies = {
+                'http': proxy_url_with_auth,
+                'https': proxy_url_with_auth
+            }
+        else:
+            proxies = {
+                'http': config.proxy_url,
+                'https': config.proxy_url
+            }
+    
     log_info("")
     
     try:
-        response = requests.post(url, headers=headers, json=data)
+        # Try with requests-ntlm if available for better NTLM support
+        try:
+            from requests_ntlm import HttpNtlmAuth
+            if config.use_proxy and config.proxy_username and config.proxy_password:
+                log_info("Using NTLM authentication for proxy")
+                # For NTLM, we need to use the auth parameter
+                # Set up session for NTLM
+                session = requests.Session()
+                session.proxies = {'http': config.proxy_url, 'https': config.proxy_url}
+                session.auth = HttpNtlmAuth(config.proxy_username, config.proxy_password)
+                response = session.post(url, headers=headers, json=data)
+            else:
+                response = requests.post(url, headers=headers, json=data, proxies=proxies)
+        except ImportError:
+            log_info("requests-ntlm not available, using basic proxy authentication")
+            log_info("For NTLM proxy support, install: pip install requests-ntlm")
+            response = requests.post(url, headers=headers, json=data, proxies=proxies)
+        
         log_info(f"HTTP Status: {response.status_code}")
         
         if response.status_code == 201:
@@ -489,6 +577,15 @@ def create_github_pr(config: Config, owner_repo: str) -> Optional[str]:
             log_error(f"  3. Token being used: {config.git_auth_token[:20]}...")
             log_error(f"Full response: {response.text}")
             return None
+        elif response.status_code == 407:
+            log_error("HTTP 407 - Proxy Authentication Required")
+            log_error("  Your corporate proxy requires authentication")
+            log_error("  Set these in config.sh or as environment variables:")
+            log_error("    PROXY_URL (e.g., http://proxy.company.com:8080)")
+            log_error("    PROXY_USERNAME")
+            log_error("    PROXY_PASSWORD")
+            log_error("  For NTLM: pip install requests-ntlm")
+            return None
         elif response.status_code == 422:
             log_error("GitHub API returned 422 - Validation failed")
             log_error("  Possible causes:")
@@ -502,6 +599,13 @@ def create_github_pr(config: Config, owner_repo: str) -> Optional[str]:
             log_error(f"Failed to create PR: {response.json().get('message', 'Unknown error')}")
             log_error(f"Full response: {response.text}")
             return None
+    except requests.exceptions.ProxyError as e:
+        log_error(f"Proxy error: {e}")
+        log_error("Check your proxy settings:")
+        log_error(f"  PROXY_URL: {config.proxy_url}")
+        log_error(f"  PROXY_USERNAME: {config.proxy_username}")
+        log_error("For NTLM proxy, install: pip install requests-ntlm")
+        return None
     except Exception as e:
         log_error(f"Exception creating PR: {e}")
         import traceback
@@ -572,8 +676,8 @@ def process_repo(repo_name: str, config: Config, log_entries: List[str]) -> bool
         log_info("✓ Branch ready")
         log_info("")
         
-        # Perform replacements
-        files_searched, files_modified, total_replacements, _ = perform_replacements(repo_path, config)
+        # Perform replacements (uses current directory)
+        files_searched, files_modified, total_replacements, _ = perform_replacements(config)
         
         if files_modified == 0:
             log_warning("No changes made")
