@@ -25,6 +25,125 @@ See [README-PYTHON.md](README-PYTHON.md) and [README-BASH.md](README-BASH.md) fo
 - ✅ Support for HTTPS (token) and SSH authentication
 - ✅ Works with private organization repositories
 
+## Prerequisites
+
+- Git installed and configured
+- Write access to target repositories
+- Authentication credentials (token or SSH keys)
+
+### Platform-Specific Requirements
+
+**Linux/macOS:**
+- Bash 4.0+ (for bash version)
+- Python 3.6+ (for Python version)
+
+**Windows:**
+- WSL (Windows Subsystem for Linux) - **Required**
+- See [Windows Setup](#windows-setup) below
+
+## Windows Setup
+
+**The scripts require a Unix-like environment and will NOT run in PowerShell or CMD.**
+
+### Option 1: WSL (Recommended)
+
+WSL provides a full Linux environment on Windows.
+
+#### Install WSL
+
+1. **Open PowerShell as Administrator** and run:
+   ```powershell
+   wsl --install
+   ```
+
+2. **Restart your computer** when prompted
+
+3. **Open "Ubuntu" from Start Menu**
+   - First launch will take a few minutes
+   - Create a Linux username and password
+
+4. **Update package list:**
+   ```bash
+   sudo apt update
+   sudo apt upgrade
+   ```
+
+#### Install Prerequisites in WSL
+
+```bash
+# Install Git
+sudo apt install git
+
+# For Python version
+sudo apt install python3 python3-pip
+pip3 install requests
+
+# For Bash version (already included)
+# No additional installation needed
+```
+
+#### Access Windows Files from WSL
+
+Your Windows drives are mounted at `/mnt/`:
+```bash
+# Navigate to your project folder
+cd /mnt/c/Users/YourUsername/Documents/batch-update
+
+# Or use Windows path
+cd $(wslpath "C:\Users\YourUsername\Documents\batch-update")
+```
+
+#### Run Scripts in WSL
+
+```bash
+# Make executable
+chmod +x repo_batch_update.py
+chmod +x repo_batch_update.sh
+
+# Run Python version
+python3 repo_batch_update.py
+
+# Run Bash version
+./repo_batch_update.sh
+```
+
+### Option 2: Git Bash (Limited Support)
+
+Git Bash provides basic Unix tools but has limitations:
+
+⚠️ **Warning:** Some features may not work correctly in Git Bash. WSL is strongly recommended.
+
+1. **Install Git for Windows** from https://git-scm.com/download/win
+   - During installation, select "Use Git and optional Unix tools from Command Prompt"
+
+2. **Open Git Bash**
+
+3. **For Python version:**
+   - Install Python from https://www.python.org/downloads/
+   - In Git Bash:
+     ```bash
+     pip install requests
+     python repo_batch_update.py
+     ```
+
+4. **For Bash version:**
+   ```bash
+   ./repo_batch_update.sh
+   ```
+
+**Known Git Bash limitations:**
+- Some sed commands may behave differently
+- File path handling may have issues
+- Performance may be slower
+
+### Recommendation for Windows Users
+
+✅ **Use WSL** for best compatibility and performance
+- Full Linux environment
+- All features work correctly
+- Better performance
+- Same commands as Linux/macOS
+
 ## Quick Start
 
 1. **Choose your version:**
@@ -133,6 +252,30 @@ PR_TITLE="Update deprecated strings"
 PR_DESCRIPTION="This PR updates several deprecated strings..."
 PR_BASE_BRANCH="main"
 ```
+
+### Proxy Configuration (Corporate Firewalls)
+
+**Only needed if your organization uses a corporate proxy/firewall**
+
+```bash
+# Environment variables (recommended)
+export PROXY_URL="http://proxy.company.com:8080"
+export PROXY_USERNAME="DOMAIN\username"
+export PROXY_PASSWORD="your-password"
+
+# Or in config.sh
+USE_PROXY=true
+PROXY_URL="http://proxy.company.com:8080"
+PROXY_USERNAME="DOMAIN\username"
+PROXY_PASSWORD="password"
+```
+
+**For NTLM proxies (most corporate environments):**
+```bash
+pip3 install requests-ntlm
+```
+
+See [AUTHENTICATION.md](AUTHENTICATION.md#corporate-proxy--firewall-configuration) for details.
 
 ## Repository List Format
 
