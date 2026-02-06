@@ -290,21 +290,14 @@ def perform_replacements(repo_path: Path, config: Config) -> Tuple[int, int, int
     log_info(f"Number of replacement rules: {len(config.replacements)}")
     log_info("")
     
+    if len(config.replacements) == 0:
+        log_error("No replacement rules configured!")
+        return 0, 0, 0, []
+    
     files_searched = 0
     files_modified = 0
     total_replacements = 0
     change_details = []
-    
-    # Compile regex patterns for all replacements
-    compiled_patterns = []
-    for search_str, replace_str in config.replacements:
-        flags = 0 if config.case_sensitive else re.IGNORECASE
-        try:
-            pattern = re.compile(re.escape(search_str), flags)
-            compiled_patterns.append((pattern, search_str, replace_str))
-        except re.error as e:
-            log_error(f"Invalid regex pattern '{search_str}': {e}")
-            continue
     
     # Get all files matching patterns
     all_files = []
@@ -320,12 +313,17 @@ def perform_replacements(repo_path: Path, config: Config) -> Tuple[int, int, int
     
     files_searched = len(text_files)
     log_info(f"Found {files_searched} files to process")
+    
+    if files_searched == 0:
+        log_warning("No files found matching patterns!")
+        return 0, 0, 0, []
+    
     log_info("")
     
     # Process each replacement rule
-    for idx, (pattern, search_str, replace_str) in enumerate(compiled_patterns, 1):
+    for idx, (search_str, replace_str) in enumerate(config.replacements, 1):
         log_info("----------------------------------------")
-        log_info(f"Rule {idx}/{len(compiled_patterns)}: '{search_str}' → '{replace_str}'")
+        log_info(f"Rule {idx}/{len(config.replacements)}: '{search_str}' → '{replace_str}'")
         log_info("----------------------------------------")
         
         rule_files_modified = 0
@@ -337,48 +335,83 @@ def perform_replacements(repo_path: Path, config: Config) -> Tuple[int, int, int
                 with open(filepath, 'r', encoding='utf-8', errors='ignore') as f:
                     content = f.read()
                 
-                # Find all matches
-                matches = list(pattern.finditer(content))
-                
-                if matches:
-                    # Show all matches
-                    rel_path = filepath.relative_to(repo_path)
-                    log_info(f"  📝 File: {rel_path} ({len(matches)} occurrence(s))")
+                # Check if search string exists first (simple string check)
+                if config.case_sensitive:
+                    if search_str not in content:
+                        continue
+                    # Count occurrences
+                    matches_count = content.count(search_str)
+                    # Perform replacement
+                    new_content = content.replace(search_str, replace_str)
+                else:
+                    # Case-insensitive - need regex
+                    flags = re.IGNORECASE
+                    # Use re.escape for literal matching
+                    pattern = re.compile(re.escape(search_str), flags)
+                    matches = list(pattern.finditer(content))
+                    matches_count = len(matches)
                     
-                    # Get line numbers for each match
-                    lines = content.split('\n')
-                    for match in matches:
-                        # Find line number
-                        line_num = content[:match.start()].count('\n') + 1
-                        line_content = lines[line_num - 1].strip()
-                        if len(line_content) > 100:
-                            line_content = line_content[:100] + "..."
-                        log_info(f"     Line {line_num}: {line_content}")
+                    if matches_count == 0:
+                        continue
                     
                     # Perform replacement
                     new_content = pattern.sub(replace_str, content)
+                
+                if matches_count > 0 and new_content != content:
+                    # Show matches
+                    rel_path = filepath.relative_to(repo_path)
+                    log_info(f"  📝 File: {rel_path} ({matches_count} occurrence(s))")
+                    
+                    # Get line numbers for matches
+                    lines = content.split('\n')
+                    matches_shown = 0
+                    max_to_show = 10
+                    
+                    for line_idx, line in enumerate(lines, 1):
+                        line_lower = line.lower() if not config.case_sensitive else line
+                        search_lower = search_str.lower() if not config.case_sensitive else search_str
+                        
+                        if search_lower in line_lower:
+                            line_content = line.strip()
+                            if len(line_content) > 100:
+                                line_content = line_content[:100] + "..."
+                            log_info(f"     Line {line_idx}: {line_content}")
+                            matches_shown += 1
+                            if matches_shown >= max_to_show:
+                                if matches_count > max_to_show:
+                                    log_info(f"     ... and {matches_count - max_to_show} more occurrence(s)")
+                                break
                     
                     # Write back
                     with open(filepath, 'w', encoding='utf-8') as f:
                         f.write(new_content)
                     
-                    log_info(f"     ✓ Replaced {len(matches)} occurrence(s)")
+                    log_info(f"     ✓ Replaced")
                     
                     rule_files_modified += 1
-                    rule_replacements += len(matches)
+                    rule_replacements += matches_count
                     
                     change_details.append({
                         'file': str(rel_path),
                         'rule': search_str,
-                        'matches': len(matches)
+                        'matches': matches_count
                     })
             
-            except (UnicodeDecodeError, PermissionError, IsADirectoryError):
+            except (UnicodeDecodeError, PermissionError, IsADirectoryError) as e:
                 # Skip binary files, permission errors, etc.
+                continue
+            except Exception as e:
+                log_warning(f"  Error processing {filepath.name}: {e}")
                 continue
         
         if rule_files_modified == 0:
-            log_info("  ⊘ No matches found for this rule")
+            log_info(f"  ⊘ No matches found for this rule")
+            # Show debug info for first rule
+            if idx == 1:
+                log_info(f"  Debug: Searched {files_searched} files")
+                log_info(f"  Sample files:")
+                for i, f in enumerate(text_files[:3], 1):
+                    log_info(f"    {f.relative_to(repo_path)}")
         else:
             log_info("")
             log_info(f"  Summary for this rule:")
@@ -397,6 +430,7 @@ def perform_replacements(repo_path: Path, config: Config) -> Tuple[int, int, int
     log_info("")
     
     return files_searched, files_modified, total_replacements, change_details
+
 
 
 def create_github_pr(config: Config, owner_repo: str) -> Optional[str]:
