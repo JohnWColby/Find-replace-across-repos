@@ -158,15 +158,17 @@ source .env
 ./repo_batch_update.sh
 ```
 
-### 2. Use Separate Tokens for Different Purposes
+### 2. Use One Token for All Operations
+
+The script uses a single token (`GIT_AUTH_TOKEN`) for both cloning and PR creation:
 
 ```bash
-# Token for cloning/pushing (read/write repos)
-export GIT_AUTH_TOKEN="ghp_xxx_read_write"
-
-# Token for creating PRs (repo scope)
-export GIT_TOKEN="ghp_xxx_pr_creation"
+# Single token for everything
+export GIT_AUTH_TOKEN="ghp_xxx_single_token"
+./repo_batch_update.sh
 ```
+
+No need for separate `GIT_TOKEN` - one token with proper scopes is sufficient.
 
 ### 3. Set Token Expiration
 
@@ -258,17 +260,21 @@ For SSH authentication:
 
 ### Using Both Token Auth and PR Creation
 
-You can use the same token for both:
+The same token is used for both cloning and creating PRs - no need for separate tokens:
 
 ```bash
-# In config.sh
+# In config.sh - GIT_AUTH_TOKEN is used for everything
 GIT_AUTH_TOKEN="${GIT_AUTH_TOKEN:-}"
-GIT_TOKEN="${GIT_AUTH_TOKEN:-}"  # Reuse the same token
 
-# Or use different tokens
-export GIT_AUTH_TOKEN="ghp_xxx_for_cloning"
-export GIT_TOKEN="ghp_yyy_for_prs"
+# Just set it once
+export GIT_AUTH_TOKEN="ghp_xxx_single_token"
+./repo_batch_update.sh
 ```
+
+The token needs the same scopes regardless:
+- **GitHub**: `repo` scope (covers both operations)
+- **GitLab**: `api` scope (covers both operations)
+- **Bitbucket**: Repository Write + Pull Request Write
 
 ## Complete Example for GitHub Organization
 
@@ -320,3 +326,136 @@ Minimum required permissions:
 - ✅ Repositories: Read
 - ✅ Repositories: Write
 - ✅ Pull requests: Write (if CREATE_PR=true)
+
+---
+
+## Corporate Proxy / Firewall Configuration
+
+If your organization uses a corporate proxy or firewall, you may need additional configuration for PR creation to work.
+
+### Symptoms of Proxy Issues
+
+- PR creation fails with connection errors
+- GitHub API returns 407 (Proxy Authentication Required)
+- Timeouts when trying to create PRs
+- Works with `git` commands but fails with API calls
+
+### Proxy Configuration
+
+#### Environment Variables (Recommended)
+
+```bash
+# Set proxy settings
+export PROXY_URL="http://proxy.company.com:8080"
+export PROXY_USERNAME="DOMAIN\your-username"
+export PROXY_PASSWORD="your-password"
+
+# Run script
+python3 repo_batch_update.py
+```
+
+**Note:** For domain accounts, use format: `DOMAIN\username` or `domain\username`
+
+#### In config.sh
+
+```bash
+# In config.sh
+USE_PROXY=true
+PROXY_URL="http://proxy.company.com:8080"
+PROXY_USERNAME="DOMAIN\username"
+PROXY_PASSWORD="your_password"
+```
+
+**Security Note:** Using environment variables is more secure than storing credentials in config files.
+
+### NTLM Proxy Support
+
+Many corporate proxies use NTLM authentication. For best compatibility:
+
+```bash
+# Install NTLM support
+pip install requests-ntlm
+
+# Set credentials
+export PROXY_URL="http://proxy.company.com:8080"
+export PROXY_USERNAME="DOMAIN\username"
+export PROXY_PASSWORD="your-password"
+
+# Run script
+python3 repo_batch_update.py
+```
+
+The script will automatically use NTLM authentication if `requests-ntlm` is installed.
+
+### Testing Proxy Configuration
+
+Test if your proxy is working:
+
+```bash
+# Test with curl (matches working command format)
+curl -v -x http://proxy.company.com:8080 \
+  -U "DOMAIN\username:password" \
+  -L api.github.com \
+  --proxy-ntlm
+
+# Should return GitHub API response
+```
+
+### Proxy Configuration Variables
+
+| Variable | Description | Example |
+|----------|-------------|---------|
+| `PROXY_URL` | Proxy server address | `http://proxy.company.com:8080` |
+| `PROXY_USERNAME` | Domain\username | `DOMAIN\jdoe` |
+| `PROXY_PASSWORD` | Your password | `your_password` |
+| `USE_PROXY` | Enable proxy (auto if URL set) | `true` |
+
+### Troubleshooting Proxy Issues
+
+**"407 Proxy Authentication Required"**
+```bash
+# Install NTLM support
+pip install requests-ntlm
+
+# Verify credentials are set
+echo $PROXY_USERNAME
+echo $PROXY_URL
+```
+
+**"Connection timeout"**
+```bash
+# Test proxy with curl
+curl -v -x $PROXY_URL https://api.github.com
+
+# Verify proxy URL includes port
+export PROXY_URL="http://proxy.company.com:8080"
+```
+
+**Git operations work but PR creation fails**
+```bash
+# Git uses different network path than Python
+# Configure proxy for Python only:
+export PROXY_URL="http://proxy.company.com:8080"
+export PROXY_USERNAME="DOMAIN\username"
+export PROXY_PASSWORD="password"
+```
+
+### Git Through Proxy (Optional)
+
+If you also need Git operations to go through proxy:
+
+```bash
+# Configure Git proxy globally
+git config --global http.proxy http://proxy.company.com:8080
+git config --global https.proxy http://proxy.company.com:8080
+
+# Or with authentication
+git config --global http.proxy http://username:password@proxy.company.com:8080
+```
+
+### Corporate Firewall Whitelist
+
+If PR creation still fails, request IT to whitelist:
+- `api.github.com` (port 443)
+- `github.com` (port 443)
+- Your Git host URL
