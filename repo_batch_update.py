@@ -79,17 +79,66 @@ def load_config(config_file: str) -> Config:
     with open(config_file, 'r', encoding='utf-8') as f:
         content = f.read()
     
-    # Extract REPLACEMENTS array
-    match = re.search(r'declare -a REPLACEMENTS=\((.*?)\)', content, re.DOTALL)
+    # Extract REPLACEMENTS array - handle parentheses in strings
+    # Look for the array declaration and find matching closing paren
+    match = re.search(r'declare -a REPLACEMENTS=\(', content)
     if match:
-        replacements_str = match.group(1)
-        for line in replacements_str.split('\n'):
-            line = line.strip().strip('"\'')
-            if '|' in line and not line.startswith('#') and line:
-                parts = line.split('|', 1)
-                if len(parts) == 2:
-                    search, replace = parts
-                    replacements.append((search, replace))
+        start = match.end()
+        # Find the matching closing parenthesis
+        # Track nesting level considering quoted strings
+        depth = 1
+        i = start
+        in_string = False
+        string_char = None
+        
+        while i < len(content) and depth > 0:
+            char = content[i]
+            
+            # Handle string boundaries
+            if char in ('"', "'") and (i == 0 or content[i-1] != '\\'):
+                if not in_string:
+                    in_string = True
+                    string_char = char
+                elif char == string_char:
+                    in_string = False
+                    string_char = None
+            
+            # Only count parens outside strings
+            if not in_string:
+                if char == '(':
+                    depth += 1
+                elif char == ')':
+                    depth -= 1
+            
+            i += 1
+        
+        if depth == 0:
+            replacements_str = content[start:i-1]
+            
+            # Parse each line in the replacements
+            for line in replacements_str.split('\n'):
+                line = line.strip()
+                
+                # Skip empty lines and comments
+                if not line or line.startswith('#'):
+                    continue
+                
+                # Remove leading/trailing quotes
+                if (line.startswith('"') and line.endswith('"')) or \
+                   (line.startswith("'") and line.endswith("'")):
+                    line = line[1:-1]
+                
+                # Split on first unquoted pipe
+                if '|' in line:
+                    parts = line.split('|', 1)
+                    if len(parts) == 2:
+                        search, replace = parts
+                        replacements.append((search, replace))
+    
+    if not replacements:
+        log_warning("No replacement rules found in config file")
+    else:
+        log_info(f"Loaded {len(replacements)} replacement rules")
     
     # Extract simple variable assignments
     for line in content.split('\n'):
@@ -355,10 +404,18 @@ def create_github_pr(config: Config, owner_repo: str) -> Optional[str]:
     log_info(f"Creating GitHub PR for: {owner_repo}")
     
     url = f"https://api.github.com/repos/{owner_repo}/pulls"
+    
+    # Verify token is set
+    if not config.git_auth_token:
+        log_error("GIT_AUTH_TOKEN is not set!")
+        return None
+    
     headers = {
-        'Authorization': f'token {config.git_auth_token}',
-        'Accept': 'application/vnd.github.v3+json'
+        'Authorization': f'Bearer {config.git_auth_token}',
+        'Accept': 'application/vnd.github+json',
+        'X-GitHub-Api-Version': '2022-11-28'
     }
+    
     data = {
         'title': config.pr_title,
         'body': config.pr_description,
@@ -370,6 +427,8 @@ def create_github_pr(config: Config, owner_repo: str) -> Optional[str]:
     log_info(f"PR title: {config.pr_title}")
     log_info(f"Source branch: {config.branch_name}")
     log_info(f"Target branch: {config.pr_base_branch}")
+    log_info(f"Token (first 10 chars): {config.git_auth_token[:10]}...")
+    log_info("")
     
     try:
         response = requests.post(url, headers=headers, json=data)
@@ -379,12 +438,40 @@ def create_github_pr(config: Config, owner_repo: str) -> Optional[str]:
             pr_url = response.json()['html_url']
             log_info(f"✓ Pull Request created: {pr_url}")
             return pr_url
+        elif response.status_code == 404:
+            log_error("GitHub API returned 404 - Possible causes:")
+            log_error("  1. Repository doesn't exist or wrong owner/repo name")
+            log_error(f"     Tried: {owner_repo}")
+            log_error("  2. Token doesn't have access to this repository")
+            log_error("  3. Token doesn't have 'repo' scope")
+            log_error("  4. Token format issue (should start with 'ghp_' for classic tokens or 'github_pat_' for fine-grained)")
+            log_error(f"Full response: {response.text}")
+            return None
+        elif response.status_code == 401:
+            log_error("GitHub API returned 401 - Authentication failed")
+            log_error("  Possible causes:")
+            log_error("  1. Token is invalid or expired")
+            log_error("  2. Token format is wrong")
+            log_error(f"  3. Token being used: {config.git_auth_token[:20]}...")
+            log_error(f"Full response: {response.text}")
+            return None
+        elif response.status_code == 422:
+            log_error("GitHub API returned 422 - Validation failed")
+            log_error("  Possible causes:")
+            log_error("  1. PR already exists for this branch")
+            log_error("  2. Branch doesn't exist on remote")
+            log_error("  3. Base branch doesn't exist")
+            error_details = response.json()
+            log_error(f"Error details: {json.dumps(error_details, indent=2)}")
+            return None
         else:
             log_error(f"Failed to create PR: {response.json().get('message', 'Unknown error')}")
             log_error(f"Full response: {response.text}")
             return None
     except Exception as e:
         log_error(f"Exception creating PR: {e}")
+        import traceback
+        log_error(traceback.format_exc())
         return None
 
 
@@ -411,6 +498,9 @@ def process_repo(repo_name: str, config: Config, log_entries: List[str]) -> bool
     log_info(f"Local path: {repo_path}")
     log_info("")
     
+    # Save original directory to ensure we always return to it
+    original_dir = Path.cwd()
+    
     try:
         # Clone repository
         log_info("Cloning repository...")
@@ -425,6 +515,7 @@ def process_repo(repo_name: str, config: Config, log_entries: List[str]) -> bool
         
         # Change to repo directory
         os.chdir(repo_path)
+        log_info(f"Changed to directory: {os.getcwd()}")
         
         # Create or checkout branch
         log_info(f"Creating branch: {config.branch_name}")
@@ -503,11 +594,15 @@ def process_repo(repo_name: str, config: Config, log_entries: List[str]) -> bool
         
     except Exception as e:
         log_error(f"Exception processing {repo_name}: {e}")
+        import traceback
+        log_error(traceback.format_exc())
         log_entries.append(f"{repo_name}\tFailed: {str(e)}")
         return False
     finally:
-        # Always return to original directory
-        os.chdir(Path.cwd().parent if Path.cwd().name == repo_name else Path.cwd())
+        # ALWAYS return to original directory
+        os.chdir(original_dir)
+        log_info(f"Returned to directory: {os.getcwd()}")
+        log_info("")
 
 
 def main():
