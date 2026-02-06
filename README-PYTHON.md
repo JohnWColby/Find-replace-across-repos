@@ -25,6 +25,12 @@ See [PERFORMANCE.md](PERFORMANCE.md) for detailed benchmarks.
 - Git installed and configured
 - `requests` library (for PR creation)
 
+### Platform Support
+
+**Linux:** Native support, works perfectly
+**macOS:** Native support, works perfectly
+**Windows:** Multiple options available
+
 ### Check Prerequisites
 
 ```bash
@@ -39,11 +45,120 @@ git --version
 pip3 --version
 ```
 
+## Windows Installation
+
+The Python version works great on Windows! Choose the option that works best for you:
+
+### Option 1: Native Windows Python (Recommended for Windows)
+
+**Easiest option - runs directly on Windows without WSL**
+
+1. **Install Python for Windows**
+   - Download from https://www.python.org/downloads/
+   - During installation: ✅ Check "Add Python to PATH"
+   - Recommended: Python 3.9 or higher
+
+2. **Install Git for Windows**
+   - Download from https://git-scm.com/download/win
+   - Use default settings
+
+3. **Install dependencies**
+   
+   Open Command Prompt or PowerShell:
+   ```powershell
+   pip install requests
+   ```
+
+4. **Run the script**
+   ```powershell
+   # Set authentication token
+   $env:GIT_AUTH_TOKEN="your_token_here"
+   
+   # Run script
+   python repo_batch_update.py
+   
+   # Or with custom config
+   python repo_batch_update.py --config .\config.sh
+   ```
+
+**Note on config.sh:** The script will parse the bash config file even on Windows. Just make sure line endings are Unix-style (LF not CRLF).
+
+### Option 2: WSL (Windows Subsystem for Linux)
+
+**Best for consistency with Linux/macOS**
+
+1. **Install WSL**
+   
+   Open PowerShell as Administrator:
+   ```powershell
+   wsl --install
+   ```
+
+2. **Restart computer** when prompted
+
+3. **Open "Ubuntu" from Start Menu**
+   - First launch takes a few minutes
+   - Create username and password
+
+4. **Install prerequisites in WSL**
+   ```bash
+   sudo apt update
+   sudo apt install python3 python3-pip git
+   pip3 install requests
+   ```
+
+5. **Access Windows files from WSL**
+   ```bash
+   # Your Windows drives are at /mnt/
+   cd /mnt/c/Users/YourUsername/Documents/batch-update
+   
+   # Or convert Windows path
+   cd $(wslpath "C:\Users\YourUsername\Documents\batch-update")
+   ```
+
+6. **Run the script**
+   ```bash
+   chmod +x repo_batch_update.py
+   export GIT_AUTH_TOKEN="your_token_here"
+   ./repo_batch_update.py
+   ```
+
+### Option 3: Git Bash
+
+**Quick option if you already have Git for Windows**
+
+1. **Install Git for Windows** (includes Git Bash)
+   - Download from https://git-scm.com/download/win
+
+2. **Install Python** (as in Option 1)
+
+3. **Open Git Bash**
+
+4. **Install dependencies**
+   ```bash
+   pip install requests
+   ```
+
+5. **Run the script**
+   ```bash
+   export GIT_AUTH_TOKEN="your_token_here"
+   python repo_batch_update.py
+   ```
+
+### Windows Recommendations
+
+| Your Situation | Best Option |
+|----------------|-------------|
+| Just want it to work | Native Windows Python (Option 1) |
+| Need Linux compatibility | WSL (Option 2) |
+| Already use Git Bash | Git Bash (Option 3) |
+| Using both Bash and Python versions | WSL (Option 2) |
+
 ## Installation
 
 ### 1. Install Python (if needed)
 
-**Ubuntu/Debian:**
+**Ubuntu/Debian (including WSL):**
 ```bash
 sudo apt-get update
 sudo apt-get install python3 python3-pip
@@ -53,6 +168,15 @@ sudo apt-get install python3 python3-pip
 ```bash
 brew install python3
 ```
+
+**Windows (Native):**
+1. Download Python from https://www.python.org/downloads/
+2. Run installer and check "Add Python to PATH"
+3. Open Command Prompt and verify:
+   ```powershell
+   python --version
+   pip --version
+   ```
 
 **Windows (WSL):**
 ```bash
@@ -64,7 +188,12 @@ sudo apt-get install python3 python3-pip
 
 ```bash
 pip3 install requests
+
+# Optional: For corporate proxy with NTLM authentication
+pip3 install requests-ntlm
 ```
+
+**For corporate environments with proxies:** See the Proxy Configuration section below.
 
 ### 3. Make Script Executable
 
@@ -139,6 +268,66 @@ The script automatically:
 - Uses identical settings
 
 See [README-MAIN.md](README-MAIN.md) for configuration details.
+
+## Proxy Configuration (Corporate Firewalls)
+
+If your organization uses a corporate proxy, you'll need to configure proxy settings for PR creation.
+
+### Quick Setup
+
+```bash
+# Set proxy credentials
+export PROXY_URL="http://proxy.company.com:8080"
+export PROXY_USERNAME="DOMAIN\username"
+export PROXY_PASSWORD="your-password"
+
+# Install NTLM support (for most corporate proxies)
+pip3 install requests-ntlm
+
+# Run script
+python3 repo_batch_update.py
+```
+
+### Configuration Options
+
+**Option 1: Environment Variables (Recommended)**
+```bash
+export PROXY_URL="http://proxy.company.com:8080"
+export PROXY_USERNAME="DOMAIN\username"
+export PROXY_PASSWORD="password"
+```
+
+**Option 2: In config.sh**
+```bash
+USE_PROXY=true
+PROXY_URL="http://proxy.company.com:8080"
+PROXY_USERNAME="DOMAIN\username"
+PROXY_PASSWORD="password"
+```
+
+### Testing Proxy
+
+```bash
+# Test with curl (your working command)
+curl -v -x http://proxy.company.com:8080 \
+  -U "DOMAIN\username:password" \
+  -L api.github.com \
+  --proxy-ntlm
+```
+
+If curl works, the Python script should work with the same credentials.
+
+### NTLM Authentication
+
+Most corporate proxies use NTLM. Install support:
+
+```bash
+pip3 install requests-ntlm
+```
+
+The script automatically detects and uses NTLM if this package is installed.
+
+See [AUTHENTICATION.md](AUTHENTICATION.md#corporate-proxy--firewall-configuration) for detailed proxy troubleshooting.
 
 ## Features
 
@@ -302,6 +491,58 @@ done
 
 ## Troubleshooting
 
+### Windows-Specific Issues
+
+**"python3: command not found" on Windows**
+
+On Windows, use `python` instead of `python3`:
+```powershell
+# Check version
+python --version
+
+# Run script
+python repo_batch_update.py
+
+# Create alias in PowerShell (optional)
+Set-Alias python3 python
+```
+
+**"pip3: command not found" on Windows**
+```powershell
+# Use 'pip' instead of 'pip3'
+pip install requests
+```
+
+**Config file line ending issues (CRLF vs LF)**
+```powershell
+# Option 1: Use VS Code - Change line endings to LF
+# Option 2: In WSL, use dos2unix:
+sudo apt install dos2unix
+dos2unix config.sh
+```
+
+**"Permission denied" on Windows**
+```powershell
+# No chmod needed on native Windows
+python repo_batch_update.py
+
+# In WSL, use chmod:
+chmod +x repo_batch_update.py
+```
+
+**Setting environment variables on Windows**
+```powershell
+# PowerShell
+$env:GIT_AUTH_TOKEN="your_token_here"
+python repo_batch_update.py
+
+# Command Prompt
+set GIT_AUTH_TOKEN=your_token_here
+python repo_batch_update.py
+```
+
+### General Issues
+
 ### "ModuleNotFoundError: No module named 'requests'"
 
 ```bash
@@ -360,6 +601,44 @@ echo $?  # Should be 0
 ### Unicode/Encoding errors
 
 The Python version handles these automatically. Files with encoding issues are skipped with a warning.
+
+### Proxy / Firewall Issues
+
+**"407 Proxy Authentication Required"**
+```bash
+# Install NTLM support
+pip3 install requests-ntlm
+
+# Set proxy credentials
+export PROXY_URL="http://proxy.company.com:8080"
+export PROXY_USERNAME="DOMAIN\username"  
+export PROXY_PASSWORD="your-password"
+```
+
+**"Connection timeout" or "Cannot connect to GitHub API"**
+```bash
+# Test proxy connection
+curl -v -x $PROXY_URL https://api.github.com
+
+# Set proxy settings
+export PROXY_URL="http://proxy.company.com:8080"
+export PROXY_USERNAME="DOMAIN\username"
+export PROXY_PASSWORD="password"
+```
+
+**PR creation fails but git operations work**
+```bash
+# Git and Python use different network paths
+# Configure Python proxy separately:
+export PROXY_URL="http://proxy.company.com:8080"
+export PROXY_USERNAME="DOMAIN\username"
+export PROXY_PASSWORD="password"
+
+# Install NTLM support
+pip3 install requests-ntlm
+```
+
+See [AUTHENTICATION.md](AUTHENTICATION.md#corporate-proxy--firewall-configuration) for detailed proxy setup.
 
 ## Comparison with Bash Version
 
