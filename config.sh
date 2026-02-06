@@ -117,3 +117,24 @@ PR_BASE_BRANCH="main"
 
 # NOTE: PR creation uses the same token as Git authentication (GIT_AUTH_TOKEN)
 # No separate token needed - the token with 'repo' scope can do both
+
+# ============================================================================
+# PROXY CONFIGURATION (Optional - for corporate firewalls)
+# ============================================================================
+
+# Enable proxy for GitHub API calls (true/false)
+USE_PROXY=false
+
+# Proxy URL (e.g., http://proxy.company.com:8080)
+PROXY_URL="${PROXY_URL:-}"
+
+# Proxy credentials (for NTLM authentication)
+PROXY_USERNAME="${PROXY_USERNAME:-}"
+PROXY_PASSWORD="${PROXY_PASSWORD:-}"
+
+# Note: For NTLM proxy support, install: pip install requests-ntlm
+# Example usage:
+#   export PROXY_URL="http://proxy.company.com:8080"
+#   export PROXY_USERNAME="domain\username"
+#   export PROXY_PASSWORD="your_password"
+#   python3 repo_batch_update.py
