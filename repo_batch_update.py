@@ -23,6 +23,7 @@ class Config:
     """Configuration loaded from config file"""
     repo_list_file: str
     branch_name: str
+    source_branch: str
     git_base_url: str
     work_dir: str
     log_file: str
@@ -213,6 +214,7 @@ def load_config(config_file: str) -> Config:
     return Config(
         repo_list_file=config_vars.get('REPO_LIST_FILE', 'repos.txt'),
         branch_name=config_vars.get('BRANCH_NAME', 'update-strings'),
+        source_branch=config_vars.get('SOURCE_BRANCH', ''),
         git_base_url=config_vars.get('GIT_BASE_URL', ''),
         work_dir=config_vars.get('WORK_DIR', './repos_temp'),
         log_file=config_vars.get('LOG_FILE', './batch_update_log.txt'),
@@ -655,7 +657,70 @@ def process_repo(repo_name: str, config: Config, log_entries: List[str]) -> bool
         os.chdir(repo_path)
         log_info(f"Changed to directory: {os.getcwd()}")
         
-        # Create or checkout branch
+        # Checkout source branch if specified
+        if config.source_branch:
+            log_info(f"Checking out source branch: {config.source_branch}")
+            result = subprocess.run(['git', 'checkout', config.source_branch], 
+                                  capture_output=True, text=True)
+            
+            if result.returncode != 0:
+                log_error(f"Failed to checkout source branch '{config.source_branch}': {result.stderr}")
+                log_error("Source branch may not exist in this repository")
+                log_failed_repo(repo_name, f"Source branch '{config.source_branch}' not found")
+                return False
+            
+            log_info(f"✓ Checked out source branch: {config.source_branch}")
+            
+            # Fetch latest changes
+            log_info("Fetching latest changes from remote...")
+            result = subprocess.run(['git', 'fetch', 'origin', config.source_branch], 
+                                  capture_output=True, text=True)
+            if result.returncode != 0:
+                log_warning(f"Failed to fetch: {result.stderr}")
+            else:
+                log_info("✓ Fetched latest changes")
+            
+            # Check if local branch is behind remote
+            log_info("Checking if branch is up to date...")
+            result = subprocess.run(['git', 'rev-list', '--count', f'HEAD..origin/{config.source_branch}'], 
+                                  capture_output=True, text=True)
+            
+            if result.returncode == 0:
+                commits_behind = result.stdout.strip()
+                
+                if commits_behind and int(commits_behind) > 0:
+                    log_info(f"Branch is {commits_behind} commit(s) behind remote")
+                    
+                    # Check if there are local commits ahead
+                    result = subprocess.run(['git', 'rev-list', '--count', f'origin/{config.source_branch}..HEAD'], 
+                                          capture_output=True, text=True)
+                    
+                    if result.returncode == 0:
+                        commits_ahead = result.stdout.strip()
+                        
+                        if commits_ahead and int(commits_ahead) > 0:
+                            log_warning(f"Branch has {commits_ahead} local commit(s) ahead of remote")
+                            log_warning("Skipping pull to avoid potential conflicts")
+                        else:
+                            # Safe to pull - no local commits ahead
+                            log_info("Pulling latest changes...")
+                            result = subprocess.run(['git', 'pull', 'origin', config.source_branch], 
+                                                  capture_output=True, text=True)
+                            
+                            if result.returncode != 0:
+                                log_warning(f"Failed to pull: {result.stderr}")
+                            else:
+                                log_info("✓ Pulled latest changes")
+                else:
+                    log_info("✓ Branch is up to date")
+        else:
+            # Get current branch name for logging
+            result = subprocess.run(['git', 'branch', '--show-current'], 
+                                  capture_output=True, text=True)
+            current_branch = result.stdout.strip()
+            log_info(f"Using current branch: {current_branch}")
+        
+        # Create or checkout new branch
         log_info(f"Creating branch: {config.branch_name}")
         result = subprocess.run(['git', 'checkout', '-b', config.branch_name], 
                               capture_output=True, text=True)
