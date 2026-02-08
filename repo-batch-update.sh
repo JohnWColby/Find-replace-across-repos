@@ -30,6 +30,9 @@ if [ -z "$REPO_LIST_FILE" ] || [ -z "$BRANCH_NAME" ] || [ -z "$GIT_BASE_URL" ]; 
     exit 1
 fi
 
+# Set default for SOURCE_BRANCH if not set
+SOURCE_BRANCH="${SOURCE_BRANCH:-}"
+
 # Validate authentication configuration
 if [ -z "$GIT_AUTH_METHOD" ]; then
     echo "ERROR: GIT_AUTH_METHOD not set in $CONFIG_FILE"
@@ -590,6 +593,91 @@ process_repo() {
         log_failed_repo "$repo_name" "Failed to change directory"
         return 1
     }
+    
+    # Checkout source branch if specified
+    if [ -n "$SOURCE_BRANCH" ]; then
+        log_info "Checking out source branch: $SOURCE_BRANCH"
+        log_info "Running: git checkout $SOURCE_BRANCH"
+        
+        local source_checkout_output
+        local source_checkout_exit_code
+        
+        source_checkout_output=$(git checkout "$SOURCE_BRANCH" 2>&1)
+        source_checkout_exit_code=$?
+        
+        echo "$source_checkout_output"
+        
+        if [ $source_checkout_exit_code -ne 0 ]; then
+            log_error "Failed to checkout source branch '$SOURCE_BRANCH' (exit code: $source_checkout_exit_code)"
+            log_error "Git output: $source_checkout_output"
+            log_error "Source branch may not exist in this repository"
+            log_failed_repo "$repo_name" "Source branch '$SOURCE_BRANCH' not found"
+            cd - > /dev/null
+            return 1
+        fi
+        
+        log_info "✓ Checked out source branch: $SOURCE_BRANCH"
+        
+        # Fetch latest changes
+        log_info "Fetching latest changes from remote..."
+        log_info "Running: git fetch origin $SOURCE_BRANCH"
+        
+        local fetch_output
+        local fetch_exit_code
+        
+        fetch_output=$(git fetch origin "$SOURCE_BRANCH" 2>&1)
+        fetch_exit_code=$?
+        
+        if [ $fetch_exit_code -ne 0 ]; then
+            log_warning "Failed to fetch: $fetch_output"
+        else
+            echo "$fetch_output"
+            log_info "✓ Fetched latest changes"
+        fi
+        
+        # Check if local branch is behind remote
+        log_info "Checking if branch is up to date..."
+        
+        local commits_behind
+        commits_behind=$(git rev-list --count HEAD..origin/"$SOURCE_BRANCH" 2>/dev/null)
+        
+        if [ $? -eq 0 ] && [ -n "$commits_behind" ] && [ "$commits_behind" -gt 0 ]; then
+            log_info "Branch is $commits_behind commit(s) behind remote"
+            
+            # Check if there are local commits ahead
+            local commits_ahead
+            commits_ahead=$(git rev-list --count origin/"$SOURCE_BRANCH"..HEAD 2>/dev/null)
+            
+            if [ $? -eq 0 ] && [ -n "$commits_ahead" ] && [ "$commits_ahead" -gt 0 ]; then
+                log_warning "Branch has $commits_ahead local commit(s) ahead of remote"
+                log_warning "Skipping pull to avoid potential conflicts"
+            else
+                # Safe to pull - no local commits ahead
+                log_info "Pulling latest changes..."
+                log_info "Running: git pull origin $SOURCE_BRANCH"
+                
+                local pull_output
+                local pull_exit_code
+                
+                pull_output=$(git pull origin "$SOURCE_BRANCH" 2>&1)
+                pull_exit_code=$?
+                
+                echo "$pull_output"
+                
+                if [ $pull_exit_code -ne 0 ]; then
+                    log_warning "Failed to pull: $pull_output"
+                else
+                    log_info "✓ Pulled latest changes"
+                fi
+            fi
+        else
+            log_info "✓ Branch is up to date"
+        fi
+    else
+        # Get current branch name for logging
+        local current_branch=$(git branch --show-current)
+        log_info "Using current branch: $current_branch"
+    fi
     
     # Create and checkout new branch
     log_info "Creating branch: $BRANCH_NAME"
