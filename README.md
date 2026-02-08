@@ -208,8 +208,13 @@ See [AUTHENTICATION.md](AUTHENTICATION.md) for detailed setup.
 # File containing repo names (one per line)
 REPO_LIST_FILE="repos.txt"
 
-# Branch name to create
+# Branch name to create for changes
 BRANCH_NAME="update-strings"
+
+# Source branch to start from (optional)
+# If set, this branch will be checked out before making changes
+# If not set, the default branch will be used
+SOURCE_BRANCH=""  # or "develop", "staging", etc.
 
 # Git remote base URL
 GIT_BASE_URL="https://github.com/your-org"
@@ -220,6 +225,21 @@ WORK_DIR="./repos_temp"
 # Log file for results
 LOG_FILE="./batch_update_log.txt"
 ```
+
+**Source Branch Usage:**
+- Leave empty (`SOURCE_BRANCH=""`) to use the default branch (usually `main` or `master`)
+- Set to a specific branch (e.g., `SOURCE_BRANCH="develop"`) to base changes on that branch
+- Useful when you want to update a feature branch instead of main
+- The script will fail if the source branch doesn't exist in a repository
+
+**Automatic Updates:**
+When `SOURCE_BRANCH` is set, the script automatically:
+1. Fetches latest changes from remote
+2. Checks if branch is behind remote
+3. Pulls latest changes if safe (no local commits ahead)
+4. Skips pull if there are local commits (to avoid conflicts)
+
+This ensures your changes are based on the latest code.
 
 ### Find/Replace Rules
 
@@ -369,7 +389,65 @@ awk -F'\t' '$2 ~ /^https:/ {count++} END {print count}' batch_update_log.txt
 
 ## Common Use Cases
 
-### Example 1: API Endpoint Updates
+### Example 1: Update Main Branch (Default)
+
+```bash
+BRANCH_NAME="update-api-endpoints"
+SOURCE_BRANCH=""  # Uses default branch (main/master)
+
+declare -a REPLACEMENTS=(
+    "api.old-domain.com/v1|api.new-domain.com/v2"
+    "OLD_API_KEY|NEW_API_KEY"
+)
+FILE_PATTERNS="*.py *.js *.yaml *.json"
+```
+
+Creates `update-api-endpoints` branch from default branch.
+
+### Example 2: Update Develop Branch
+
+```bash
+BRANCH_NAME="update-api-endpoints"
+SOURCE_BRANCH="develop"  # Start from develop branch
+
+declare -a REPLACEMENTS=(
+    "api.old-domain.com/v1|api.new-domain.com/v2"
+    "OLD_API_KEY|NEW_API_KEY"
+)
+FILE_PATTERNS="*.py *.js *.yaml *.json"
+```
+
+Creates `update-api-endpoints` branch from `develop` branch.
+
+### Example 3: Copyright Year Update
+
+```bash
+BRANCH_NAME="update-copyright-2026"
+SOURCE_BRANCH=""  # Uses default branch
+
+declare -a REPLACEMENTS=(
+    "Copyright 2025|Copyright 2026"
+    "© 2025|© 2026"
+)
+FILE_PATTERNS="*.py *.js *.java *.go"
+CASE_SENSITIVE=true
+```
+
+### Example 4: Update Staging Branch
+
+```bash
+BRANCH_NAME="hotfix-url-update"
+SOURCE_BRANCH="staging"  # Start from staging
+
+declare -a REPLACEMENTS=(
+    "staging.old.com|staging.new.com"
+)
+FILE_PATTERNS="*.yaml *.json *.env"
+```
+
+Creates `hotfix-url-update` branch from `staging` branch.
+
+### Example 5: Case-Insensitive URL Normalization
 
 ```bash
 BRANCH_NAME="update-api-endpoints"
@@ -392,10 +470,12 @@ FILE_PATTERNS="*.py *.js *.java *.go"
 CASE_SENSITIVE=true
 ```
 
-### Example 3: Case-Insensitive URL Normalization
+### Example 5: Case-Insensitive URL Normalization
 
 ```bash
 BRANCH_NAME="normalize-urls"
+SOURCE_BRANCH=""  # Uses default branch
+
 declare -a REPLACEMENTS=(
     "API.EXAMPLE.COM|api.example.com"
     "STAGING.EXAMPLE.COM|staging.example.com"
@@ -403,7 +483,7 @@ declare -a REPLACEMENTS=(
 CASE_SENSITIVE=false  # Matches any case variation
 ```
 
-### Example 4: Dependency Version Bump
+### Example 6: Dependency Version Bump
 
 ```bash
 BRANCH_NAME="bump-react-version"
